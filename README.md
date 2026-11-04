@@ -35,7 +35,7 @@ python -X utf8 scripts/prism.py hosts        # 列出可用宿主 adapter
 python -X utf8 scripts/prism.py schema --format markdown
 ```
 
-**依赖**：Python 3.11+，其余见 `scripts/requirements.lock`（uv pip compile 生成，禁止手改）。
+**依赖**：Python 3.10+，其余见 `scripts/requirements.lock`（uv pip compile 生成，禁止手改）。
 
 ## 快速上手
 
