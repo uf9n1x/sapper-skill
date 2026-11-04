@@ -2,9 +2,16 @@
 
 > Skill 最终名：**sapper-skill**（用户决策 2026-11-04，ADR-0012；开发目录暂为 `prism-skill/`，最终打包目录为 `sapper-skill/`）。
 >
-> 状态：**P3 全部完成（T-040 Recall/KB + T-041 可视化）。可解释混合召回、失败路径并召、离线 KB 与晋升门禁、四产物离线面板与攻击图（ADR-0010/0011），217 项测试。当前阶段 P4 实战评测与多宿主验收。**
+> 状态：**P4 全部完成（delivered）**。DVWA 实战评测（误报 2→0、重复调用率 16.7%→9.1%）、omp / workbuddy 双宿主验收、打包结构校验通过，**230 项测试**。
 >
 > 目标：基于既有 `pentest-redteam` Skill 与 `sapper-v2` 核心思想，做一个更贴近实战、可长期维护的授权渗透测试 Skill 项目。
+
+> [!IMPORTANT]
+> **仓库范围**：本仓库只含 Skill 主体（入口 / playbooks / 控制面 / 文档 / 测试 / 状态记录）。
+> 作者内部开发用的历史项目快照目录 `reference/`（约 53MB）**未随本仓库分发**——
+> 文档与 ADR 中对 `reference/` 的提及属历史决策记录；Skill 的运行、测试与打包
+> **不依赖** `reference/`（`scripts/pack_skill.py` 的打包清单可证）。
+> 本项目仅用于**授权**渗透测试与安全评估；未授权目标与黑灰产不在适用范围。
 
 ## 定位
 
@@ -80,7 +87,6 @@
 | 测试策略 | `docs/engineering/testing.md` |
 | 开发计划 | `docs/plans/development-plan.md` |
 | 任务拆解 | `docs/plans/task-breakdown.md` |
-| 参考资料索引 | `reference/README.md` |
 | 当前状态 | `state/TASKS.md`、`state/PROGRESS.md` |
 | 变更记录 | `state/CHANGELOG.md` |
 | 决策索引 | `docs/decisions/README.md` |
@@ -101,9 +107,6 @@ sapper-skill/                # 最终打包目录名（当前开发目录为 pri
     engineering/            # 编码、提交、测试规范
     plans/                  # 开发计划、任务拆解
     decisions/              # ADR 决策记录
-  reference/
-    README.md               # 参考项目索引
-    projects/               # 各参考项目快照（只读）
   scripts/
     case_ledger.py          # v1 账本基线（迁移期兼容）
     prism.py                # v2 控制面 CLI 入口
