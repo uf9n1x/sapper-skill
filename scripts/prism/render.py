@@ -108,18 +108,24 @@ def _collect(derived: state.DerivedState) -> dict:
     for intent_id in sorted(derived.intents):
         entry = derived.intents[intent_id]
         entry = dict(entry)
-        entry["status_zh"] = STATUS_ZH.get(entry.get("status", ""), entry.get("status", ""))
+        entry["status_zh"] = STATUS_ZH.get(
+            entry.get("status", ""), entry.get("status", "")
+        )
         intents.append({"id": intent_id, **entry})
     runs = []
     for run_id in sorted(derived.runs):
         entry = derived.runs[run_id]
         entry = dict(entry)
-        entry["status_zh"] = STATUS_ZH.get(entry.get("status", ""), entry.get("status", ""))
+        entry["status_zh"] = STATUS_ZH.get(
+            entry.get("status", ""), entry.get("status", "")
+        )
         runs.append({"id": run_id, **entry})
     approvals = []
     for aid in sorted(derived.approvals):
         entry = dict(derived.approvals[aid])
-        entry["status_zh"] = STATUS_ZH.get(entry.get("status", ""), entry.get("status", ""))
+        entry["status_zh"] = STATUS_ZH.get(
+            entry.get("status", ""), entry.get("status", "")
+        )
         approvals.append(entry)
     return {
         "facts": facts,
@@ -220,7 +226,9 @@ def render_mermaid(view: dict) -> str:
 
     lines.append("  subgraph attack[攻击链 Attack Chain]")
     for fact in view["assets"]:
-        lines.append(f'    {asset_id(fact["target"])}["资产 asset: {_esc(fact["target"])}"]')
+        lines.append(
+            f'    {asset_id(fact["target"])}["资产 asset: {_esc(fact["target"])}"]'
+        )
     for fact in view["services"]:
         lines.append(
             f"    {_sanitize_node_id(fact['id'])}"
@@ -228,8 +236,7 @@ def render_mermaid(view: dict) -> str:
         )
     for hyp in view["hypotheses"]:
         label = (
-            f"{hyp['id']} {_esc(hyp.get('claim', ''))}"
-            f"（{status_label(hyp['status'])}）"
+            f"{hyp['id']} {_esc(hyp.get('claim', ''))}（{status_label(hyp['status'])}）"
         )
         lines.append(f'    {hyp["id"]}["{label}"]')
     lines.append("  end")
@@ -241,8 +248,7 @@ def render_mermaid(view: dict) -> str:
         )
     for run in view["runs"]:
         lines.append(
-            f'    {run["id"]}["执行 run {run["id"]}'
-            f'（{status_label(run["status"])}）"]'
+            f'    {run["id"]}["执行 run {run["id"]}（{status_label(run["status"])}）"]'
         )
     lines.append("  end")
 
@@ -509,6 +515,8 @@ body.anim.loaded .reveal { opacity: 1; transform: none; }
 
   <div class="toolbar reveal">
     <input id="filter" type="text" placeholder="过滤 Filter：目标 / 状态 / ID 关键词" oninput="filterTables()">
+    <a class="lang" id="nav-graph" href="attack-graph.html" title="打开攻击图 Attack graph" data-zh="攻击图 →" data-en="Attack graph →">攻击图 →</a>
+    <button class="lang" id="lang-toggle" data-zh="EN" data-en="中">EN</button>
   </div>
 
   <section class="reveal" id="sec-findings">
@@ -653,13 +661,9 @@ function pollVersion() {
     if (LIVE.known !== v.ledger_sha256) { location.reload(); return; }
     updateLiveUi();
   }).catch(function () {
-    if (!LIVE.served) {
-      // file:// 打开：API 永远不可达，停止轮询（避免控制台噪音），保持离线快照
-      clearInterval(LIVE.timer);
-      LIVE.on = false; updateLiveUi();
-      return;
-    }
-    LIVE.on = false; updateLiveUi(); /* serve 模式瞬时失败：保持轮询 */
+    /* http 模式下的失败是瞬时的（或首次探测中）：保持轮询不放弃；
+       file:// 打开根本不会进入本循环，无控制台噪音 */
+    LIVE.on = false; updateLiveUi();
   });
 }
 if (location.protocol === 'file:') {
@@ -717,12 +721,18 @@ def render_attack_graph(view: dict, out_html: Path) -> None:
     for fact in view["services"]:
         service_ids[fact["id"]] = fact["id"]
         fact_node_ids[fact["id"]] = fact["id"]
-        add_node(fact["id"], f"服务 service: {fact.get('title', fact['id'])}", "service")
+        add_node(
+            fact["id"], f"服务 service: {fact.get('title', fact['id'])}", "service"
+        )
     for hyp in view["hypotheses"]:
         add_node(
             hyp["id"],
             f"{hyp['id']} {hyp.get('claim', '')[:40]}"
-            + ("★发现 finding" if hyp["is_finding"] else f"（{status_label(hyp['status'])}）"),
+            + (
+                "★发现 finding"
+                if hyp["is_finding"]
+                else f"（{status_label(hyp['status'])}）"
+            ),
             "finding" if hyp["is_finding"] else "hypothesis",
         )
     for intent in view["intents"]:
@@ -763,7 +773,9 @@ def render_attack_graph(view: dict, out_html: Path) -> None:
         hosts = _family_hosts(f"{hyp.get('claim', '')} {hyp.get('scope', '')}")
         for fact in view["services"]:
             if _family_hosts(str(fact.get("target", ""))) & hosts:
-                edges.append((hyp["id"], fact["id"], STATUS_ZH.get(hyp["status"], hyp["status"])))
+                edges.append(
+                    (hyp["id"], fact["id"], STATUS_ZH.get(hyp["status"], hyp["status"]))
+                )
         for fact in view["assets"]:
             if _family_hosts(str(fact.get("target", ""))) & hosts:
                 edges.append(
@@ -830,14 +842,22 @@ body { margin: 0; background: var(--bg); font-family: "Microsoft YaHei UI", "Pin
 .badge .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
 .badge.live { color: var(--ok); border-color: var(--ok); }
 .badge.live .dot { background: var(--ok); animation: gpulse 2s cubic-bezier(.16,1,.3,1) infinite; }
+.badge.paused { color: #a4740f; border-color: #a4740f; }
+.badge.paused .dot { background: #a4740f; }
 @keyframes gpulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
 @media (prefers-reduced-motion: reduce) { .badge.live .dot { animation: none; } }
+#graph-bar .navbtn { font-family: Consolas, "Cascadia Mono", monospace; font-size: 11.5px;
+  color: var(--ink); background: var(--surface); border: 1px solid var(--line);
+  border-radius: 999px; padding: 4px 13px; text-decoration: none; white-space: nowrap;
+  transition: background 160ms ease-out; }
+#graph-bar .navbtn:hover { background: rgba(194,69,30,.09); }
 #vis-wrap { padding: 68px 10px 10px; }
 </style>
 <div id="graph-bar">
   <span class="brand">攻击图 <em>Attack Graph</em></span>
   <span class="sub">sapper-skill · 节点/边由账本回放派生</span>
   <span class="badge" id="graph-live"><span class="dot"></span><span id="graph-live-text">离线快照 Offline snapshot</span></span>
+  <a class="navbtn" href="dashboard.html" title="返回战役面板 Dashboard">战役面板 →</a>
 </div>
 <div id="vis-wrap">
 </div>
@@ -853,18 +873,23 @@ body { margin: 0; background: var(--bg); font-family: "Microsoft YaHei UI", "Pin
     }
   }
   var known = null;
-  var served = false;
   var timer = null;
   function poll() {
     fetch('api/version').then(function (r) { return r.json(); }).then(function (v) {
-      served = true;
       var badge = document.getElementById('graph-live');
+      var text = document.getElementById('graph-live-text');
       if (known === null) known = v.ledger_sha256;
       if (known !== v.ledger_sha256) { location.reload(); return; }
-      badge.classList.add('live');
-      document.getElementById('graph-live-text').textContent = '实时监听 LIVE';
+      badge.classList.remove('live', 'paused');
+      if (v.live_enabled === false) {
+        badge.classList.add('paused');
+        text.textContent = '已暂停 PAUSED';
+      } else {
+        badge.classList.add('live');
+        text.textContent = '实时监听 LIVE';
+      }
     }).catch(function () {
-      if (!served) { clearInterval(timer); } /* serve 模式瞬时失败：停止轮询保持快照 */
+      /* http 模式下失败是瞬时的：保持轮询；file:// 不会启动轮询，无噪音 */
     });
   }
   if (location.protocol !== 'file:') {

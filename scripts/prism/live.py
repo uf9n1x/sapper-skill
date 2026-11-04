@@ -152,12 +152,12 @@ class LivePanelServer:
             "intents": [
                 {"id": iid, **derived.intents[iid]} for iid in sorted(derived.intents)
             ],
-            "runs": [
-                {"id": rid, **derived.runs[rid]} for rid in sorted(derived.runs)
-            ],
+            "runs": [{"id": rid, **derived.runs[rid]} for rid in sorted(derived.runs)],
         }
 
-    def _send_json(self, handler: BaseHTTPRequestHandler, payload: dict, code: int = 200) -> None:
+    def _send_json(
+        self, handler: BaseHTTPRequestHandler, payload: dict, code: int = 200
+    ) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         handler.send_response(code)
         handler.send_header("Content-Type", "application/json; charset=utf-8")
@@ -167,6 +167,10 @@ class LivePanelServer:
 
     def _handle_get(self, handler: BaseHTTPRequestHandler) -> None:
         path = handler.path.split("?", 1)[0]
+        # 页面托管在 /dashboard/ 下，前端相对路径 api/* 会打到
+        # /dashboard/api/*——等价路由，避免 404 导致前端轮询永久停止
+        if path.startswith("/dashboard/api/"):
+            path = path[len("/dashboard") :]
         if path in ("/api/state", "/api/version"):
             try:
                 payload = self._state_payload()
@@ -188,7 +192,7 @@ class LivePanelServer:
             handler.end_headers()
             return
         if path.startswith("/dashboard/"):
-            self._serve_file(handler, path[len("/dashboard/"):])
+            self._serve_file(handler, path[len("/dashboard/") :])
             return
         handler.send_error(404)
 
@@ -216,6 +220,8 @@ class LivePanelServer:
 
     def _handle_post(self, handler: BaseHTTPRequestHandler) -> None:
         path = handler.path.split("?", 1)[0]
+        if path.startswith("/dashboard/api/"):
+            path = path[len("/dashboard") :]
         if path != "/api/live":
             handler.send_error(404)
             return
@@ -229,9 +235,7 @@ class LivePanelServer:
             self._send_json(handler, {"error": "missing 'enabled'"}, 400)
             return
         self.set_live(bool(payload["enabled"]))
-        self._send_json(
-            handler, {"live_enabled": self.live_enabled, "now": _now_iso()}
-        )
+        self._send_json(handler, {"live_enabled": self.live_enabled, "now": _now_iso()})
 
 
 def prompt_live_enabled(explicit: bool | None) -> bool:
@@ -243,7 +247,9 @@ def prompt_live_enabled(explicit: bool | None) -> bool:
 
         if not sys.stdin.isatty():
             return True  # 非交互（脚本/子 Agent 驱动）：默认开启
-        answer = input("是否开启实时可视化（账本变化自动重渲染）？[Y/n] ").strip().lower()
+        answer = (
+            input("是否开启实时可视化（账本变化自动重渲染）？[Y/n] ").strip().lower()
+        )
     except (EOFError, OSError):
         return True
     return answer not in ("n", "no", "否")
