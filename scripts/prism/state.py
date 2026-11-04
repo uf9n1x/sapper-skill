@@ -51,6 +51,7 @@ class DerivedState:
     hypotheses: dict = field(default_factory=dict)
     evidence_by_id: dict = field(default_factory=dict)
     verdicts: dict = field(default_factory=dict)  # 假设 -> 最新裁决信息
+    verdict_ids: set = field(default_factory=set)  # 已出现的裁决 ID（防重复）
     findings: list = field(default_factory=list)
     counts: dict = field(default_factory=dict)
 
@@ -127,6 +128,7 @@ def replay(case: Path) -> DerivedState:
         elif record.type == "verdict":
             # 最新裁决覆盖（同假设多条裁决按账本顺序取最后）
             derived.verdicts[record.hypothesis] = record.model_dump()
+            derived.verdict_ids.add(record.id)
 
     # --- Intent / Run：最新事件派生当前状态，保留事件历史；字段展平到顶层 ---
     for record in records:

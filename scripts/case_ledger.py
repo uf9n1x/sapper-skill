@@ -541,6 +541,13 @@ def delta(record, records):
 def main(argv=None):
     args = cli().parse_args(argv)
     case = paths(args.case)[0]
+    if args.command in TYPES or args.command == "render":
+        print(
+            "DEPRECATED: case_ledger.py 写入命令（v1）仅供历史案件使用；新案件一律用 "
+            "prism.py intent/hypothesis/evidence/verdict（v2）。v1 账本过不了 "
+            "'prism.py verify' 报告门禁，历史案件请先 'prism.py migrate'。",
+            file=sys.stderr,
+        )
     try:
         if args.command in TYPES:
             record = make_record(args)

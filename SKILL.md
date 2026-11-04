@@ -23,18 +23,18 @@ agent_created: true
 
 ### Focused validation（默认，单目标 / 单假设）
 
-按 `playbooks/focused.md` 走最小闭环；默认不初始化 ledger，需要保存证据时再使用同一 `case/ledger.jsonl`，不创建另一套 tracker。
+按 `playbooks/focused.md` 走最小闭环；**第一步建案件（`prism.py intent`）后立即 `prism.py serve` 启动可视化面板并告知用户 URL**，之后全程只通过 v2 命令写账本，不创建另一套 tracker。
 
 ### Engagement mode（多资产、长时评估）
 
 按主循环（§3）持续决策：
 
-- `case/ledger.jsonl` 是 hypothesis / evidence / verdict / fact / intent / run / approval 的唯一机器真相源；仅通过脚本追加，禁止手工改写状态。Intent 与 Run 为追加事件模型，当前状态由最新事件派生（`prism.py state`）；v1 旧账本用 `prism.py migrate` 升级，不可直接回放。
+- `case/ledger.jsonl` 是 hypothesis / evidence / verdict / fact / intent / run / approval 的唯一机器真相源；仅通过 `prism.py` 追加，禁止手工改写状态。Intent 与 Run 为追加事件模型，当前状态由最新事件派生（`prism.py state`）；v1 旧账本用 `prism.py migrate` 升级，不可直接回放。
 - 原始响应、日志和截图保存到 `case/artifacts/`；ledger 只保存相对路径、SHA-256 和短摘要。
-- `case/evidence-validation.md` 自动生成，禁止手工维护；删除后用 `render` 完整重建。
+- `case/evidence-validation.md` 与面板是派生物，禁止手工维护；删除后用 `render` 完整重建。
 - 黑板自动折叠已了结（killed/暂缓）假设，完整明细始终在 `case/evidence-validation.md`。
-- 会话开始、上下文压缩或切换任务后，先运行 `context --plain` 恢复黑板，不凭记忆续跑。
-- 需要实时掌握全局进展时启动 `prism.py serve`：账本变化自动重渲染面板，可随时暂停/恢复（页内按钮或 `/api/live`）；`dashboard.html` / `attack-graph.html` 离线双击打开时自动退化为快照模式。
+- 会话开始、上下文压缩或切换任务后，先运行 `state` 恢复派生状态，不凭记忆续跑。
+- **可视化**：案件建立后启动 `prism.py serve`（输出面板 URL 交给用户，询问是否实时跟随）；账本变化自动重渲染，可随时暂停/恢复（页内按钮或 `/api/live`）；`dashboard.html` / `attack-graph.html` 离线双击打开时自动退化为快照模式。
 
 ## 3. 主循环（Commander → Worker → Verifier → Report）
 
@@ -50,16 +50,12 @@ Result 契约见 `references/result-schema.md`（自动生成，禁止手工编�
 ## 4. 命令面
 
 ```text
-# v1 账本（迁移期兼容，行为冻结）
-python -X utf8 scripts/case_ledger.py hypothesis <case> --id H1 --claim <...> --scope <...> --disprove-if <...>
-python -X utf8 scripts/case_ledger.py evidence <case> --id E1 --hypothesis H1 --role observation --effect supports --artifact artifacts/x.txt --summary <...>
-python -X utf8 scripts/case_ledger.py verdict <case> --id V1 --hypothesis H1 --status confirmed --evidence E1 E2 E3 --reason <...>
-python -X utf8 scripts/case_ledger.py verify <case> [--report] [--repair-tail]
-python -X utf8 scripts/case_ledger.py render <case>
-python -X utf8 scripts/case_ledger.py context <case> --plain
-
-# v2 控制面
+# v2 控制面（唯一命令面；新案件禁止使用 case_ledger.py）
 python -X utf8 scripts/prism.py schema --format json|markdown [--out <path>]
+python -X utf8 scripts/prism.py intent <case> --id I1 --title <...> --objective <...> --target <...> --angle <...>
+python -X utf8 scripts/prism.py hypothesis <case> --id H1 --claim <...> --scope <...> --disprove-if <...>
+python -X utf8 scripts/prism.py evidence <case> --hypothesis H1 --role observation --effect supports --artifact artifacts/x --summary <...> [--run R1] [--actor <...>]
+python -X utf8 scripts/prism.py verdict <case> --hypothesis H1 --status confirmed --evidence E1 E2 E3 --reason <...> --verifier-run R2
 python -X utf8 scripts/prism.py pack <case> --hypothesis H1 [--json]
 python -X utf8 scripts/prism.py verify-pack <case> --hypothesis H1 [--json]
 python -X utf8 scripts/prism.py migrate <v1_case> --out <v2_case>
@@ -79,6 +75,19 @@ python -X utf8 scripts/prism.py serve <case> [--host 127.0.0.1] [--port 8765] [-
 python -X utf8 scripts/prism.py verify <case>
 ```
 
+<details>
+<summary>v1 账本（仅历史案件只读/迁移用；新案件一律禁止，门禁不覆盖 v1）</summary>
+
+```text
+python -X utf8 scripts/case_ledger.py verify <case> --report   # 只读检查
+python -X utf8 scripts/case_ledger.py context <case> --plain   # 只读恢复
+python -X utf8 scripts/prism.py migrate <v1_case> --out <v2_case>  # 迁移后用 v2 续跑
+```
+
+`case_ledger.py` 的 hypothesis/evidence/verdict/render 写入命令已冻结弃用：
+v1 不校验三角色闭环与 verifier_run，confirmed 不可信。历史案件先 `migrate`，再走 v2。
+</details>
+
 ## 5. 证据与验证纪律
 
 - confirmed 裁决必须具备 observation / reproduction / impact 三类证据；provisional 只能声明"已确认·待补影响"。
@@ -90,7 +99,7 @@ python -X utf8 scripts/prism.py verify <case>
 
 ## 6. 报告门禁
 
-REPORT 阶段先运行 `prism.py verify <case>`（v2 报告门禁）：全部 confirmed 三角色闭环且带 `verifier_run` 溯源、无未闭环 provisional，才能产出报告。Inconclusive / deferred / killed 在报告中明确披露（见 `playbooks/report.md`）。v1 案件用 `case_ledger.py verify <case> --report`。
+REPORT 阶段必须先运行 `prism.py verify <case>`：全部 confirmed 三角色闭环且带 `verifier_run` 溯源、无未闭环 provisional，输出 `REPORT gate: PASS` 才能产出报告（FAIL 明细照提示补齐，不得绕过）。v1 账本无法通过该门禁——先 `migrate` 升级再续跑。Inconclusive / deferred / killed 在报告中明确披露（见 `playbooks/report.md`）。
 
 ## 7. 硬约束
 

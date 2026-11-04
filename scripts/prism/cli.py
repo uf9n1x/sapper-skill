@@ -16,7 +16,7 @@ from pathlib import Path
 
 import typer
 
-from prism import identity, migration, models, packets, parsers
+from prism import identity, migration, models, packets, parsers, records
 from prism import ingest as ingest_module
 from prism import knowledge as knowledge_module
 from prism import recall as recall_module
@@ -114,6 +114,130 @@ def verify_pack(
         "verifier-{hypothesis}.md",
         json_output,
     )
+
+
+def _echo_record(payload: dict) -> None:
+    typer.echo(json.dumps(payload, ensure_ascii=False))
+
+
+@app.command()
+def intent(
+    case: str = typer.Argument(help="案件目录（不存在时自动初始化）"),
+    id: str | None = typer.Option(None, "--id", help="Intent ID（缺省自动分配）"),
+    title: str = typer.Option(..., "--title", help="一句话任务标题"),
+    objective: str = typer.Option(..., "--objective", help="任务目标"),
+    target: str = typer.Option(..., "--target", help="目标范围"),
+    angle: str = typer.Option(..., "--angle", help="切入角度"),
+    priority: int = typer.Option(3, "--priority", min=1, max=5),
+    timebox: int | None = typer.Option(None, "--timebox-minutes", min=1),
+) -> None:
+    """创建 Intent（案件不存在时自动初始化目录与账本）。"""
+    try:
+        _echo_record(
+            records.record_intent(
+                Path(case).expanduser().resolve(),
+                id,
+                title,
+                objective=objective,
+                target=target,
+                angle=angle,
+                priority=priority,
+                timebox_minutes=timebox,
+            )
+        )
+    except (ingest_module.IngestError, state_store.ReplayError) as exc:
+        _fail(str(exc))
+
+
+@app.command()
+def hypothesis(
+    case: str = typer.Argument(help="案件目录（含 ledger.jsonl）"),
+    id: str | None = typer.Option(None, "--id", help="假设 ID（缺省自动分配）"),
+    claim: str = typer.Option(..., "--claim", help="可证伪的攻击假设"),
+    scope: str = typer.Option(..., "--scope", help="目标/范围"),
+    disprove_if: list[str] = typer.Option(
+        ..., "--disprove-if", help="证伪条件（至少一条，可重复）"
+    ),
+) -> None:
+    """追加 hypothesis 记录（v2）。"""
+    try:
+        _echo_record(
+            records.record_hypothesis(
+                Path(case).expanduser().resolve(),
+                id,
+                claim,
+                scope,
+                list(disprove_if),
+            )
+        )
+    except (ingest_module.IngestError, state_store.ReplayError) as exc:
+        _fail(str(exc))
+
+
+@app.command()
+def evidence(
+    case: str = typer.Argument(help="案件目录（含 ledger.jsonl）"),
+    id: str | None = typer.Option(None, "--id", help="证据 ID（缺省自动分配）"),
+    hypothesis: str = typer.Option(..., "--hypothesis", help="所属假设 ID"),
+    role: str = typer.Option(
+        ..., "--role", help="observation|reproduction|impact|refutation"
+    ),
+    effect: str = typer.Option(..., "--effect", help="supports|refutes|context"),
+    artifact: str = typer.Option(..., "--artifact", help="case 内相对路径"),
+    summary: str = typer.Option(..., "--summary", help="一句话摘要（不含秘密原文）"),
+    run: str | None = typer.Option(None, "--run", help="关联 Run ID"),
+    actor: str | None = typer.Option(None, "--actor", help="采集者"),
+) -> None:
+    """追加 evidence 记录（v2）：SHA-256 由脚本计算，artifact 必须存在。"""
+    try:
+        _echo_record(
+            records.record_evidence(
+                Path(case).expanduser().resolve(),
+                id,
+                hypothesis,
+                role,
+                effect,
+                artifact,
+                summary,
+                run=run,
+                actor=actor,
+            )
+        )
+    except (ingest_module.IngestError, state_store.ReplayError) as exc:
+        _fail(str(exc))
+
+
+@app.command()
+def verdict(
+    case: str = typer.Argument(help="案件目录（含 ledger.jsonl）"),
+    id: str | None = typer.Option(None, "--id", help="裁决 ID（缺省自动分配）"),
+    hypothesis: str = typer.Option(..., "--hypothesis", help="目标假设 ID"),
+    status: str = typer.Option(
+        ...,
+        "--status",
+        help="confirmed|killed|inconclusive|deferred|provisional",
+    ),
+    evidence: list[str] = typer.Option(..., "--evidence", help="证据 ID（可重复）"),
+    reason: str = typer.Option(..., "--reason", help="裁决理由（≤500 字）"),
+    verifier_run: str | None = typer.Option(
+        None, "--verifier-run", help="独立 Verifier Run ID（confirmed 必填）"
+    ),
+) -> None:
+    """追加 verdict 记录（v2）：confirmed 强制 verifier_run 溯源 + 三角色闭环。"""
+    try:
+        _echo_record(
+            records.record_verdict(
+                Path(case).expanduser().resolve(),
+                id,
+                hypothesis,
+                status,
+                list(evidence),
+                reason,
+                verifier_run=verifier_run,
+            )
+        )
+    except (ingest_module.IngestError, state_store.ReplayError) as exc:
+        _fail(str(exc))
 
 
 @app.command()

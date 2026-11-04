@@ -23,5 +23,6 @@
 - `suggested_verdicts[]`：给出裁决建议与理由——这是 confirmed 的唯一驱动来源；
 - 证伪同样有价值：`killed` 是合格产出，不是失败。
 
-入账由 Commander 执行：Verifier 建议 confirmed 且三角色齐全 →
-`case_ledger.py verdict --status confirmed ...`；建议不一致 → 以更保守者为准或标记 inconclusive。
+入账由 Commander 执行：Verifier 结果包 ingest 后，建议 confirmed 且三角色齐全 →
+`prism.py verdict --status confirmed ... --verifier-run <本次 Verifier Run>`；
+建议不一致 → 以更保守者为准或标记 inconclusive。缺 `--verifier-run` 的 confirmed 会被命令直接拒绝。

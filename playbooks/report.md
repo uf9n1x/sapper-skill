@@ -5,12 +5,12 @@
 ## 门禁（必须全部通过）
 
 ```bash
-python -X utf8 scripts/case_ledger.py verify <case>          # 完整性
-python -X utf8 scripts/case_ledger.py verify <case> --report # 报告门禁
+python -X utf8 scripts/prism.py verify <case>   # 必须输出 REPORT gate: PASS
 ```
 
-1. **完整性**：账本 UTF-8 合法、无重复 ID、引用完整、哈希全部匹配。
-2. **报告门禁**：全部 confirmed 三角色（observation / reproduction / impact）闭环；无未闭环 provisional。
+1. **完整性**：v2 账本回放合法、无重复 ID、引用完整、哈希全部匹配。
+2. **报告门禁**：全部 confirmed 三角色（observation / reproduction / impact）闭环且带 `verifier_run` 溯源；无未闭环 provisional。
+3. v1 账本不能直接过门禁：先 `prism.py migrate <v1_case> --out <v2_case>` 再续跑。
 
 ## 披露要求
 
@@ -22,6 +22,6 @@ python -X utf8 scripts/case_ledger.py verify <case> --report # 报告门禁
 
 ## 输出
 
-- 人类报告：`case/evidence-validation.md`（自动生成，禁止手工维护；删除后 `render` 重建）。
+- 人类报告：`case/dashboard/`（`prism.py render` 生成，禁止手工维护；删除后重建）。
 - 引用证据时给 artifact 路径与 SHA-256，不复制敏感原文；秘密不出现在摘要。
 - Focused 模式小闭环可直接在回复中输出以上结构，同样满足披露要求。
