@@ -1,0 +1,1191 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "prism 协议与账本记录 schema（v2 冻结版，T-030）",
+  "description": "由 scripts/prism/models.py 自动生成，禁止手工编辑；字段变更须走 models.py 并重新生成（漂移守卫测试强制）。",
+  "$defs": {
+    "ApprovalRecord": {
+      "description": "高影响动作组审批：approval_key = action_class + target_scope + effect。",
+      "properties": {
+        "v": {
+          "const": 2,
+          "default": 2,
+          "description": "账本 schema 版本",
+          "title": "V",
+          "type": "integer"
+        },
+        "type": {
+          "const": "approval",
+          "default": "approval",
+          "title": "Type",
+          "type": "string"
+        },
+        "id": {
+          "description": "审批 ID（A 前缀）",
+          "pattern": "^A[A-Za-z0-9._-]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "at": {
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+          "title": "At",
+          "type": "string"
+        },
+        "action_class": {
+          "maxLength": 80,
+          "title": "Action Class",
+          "type": "string"
+        },
+        "target_scope": {
+          "maxLength": 200,
+          "title": "Target Scope",
+          "type": "string"
+        },
+        "effect": {
+          "maxLength": 80,
+          "title": "Effect",
+          "type": "string"
+        },
+        "approval_key": {
+          "default": "",
+          "description": "缺省时按三段组合自动生成：class|scope|effect",
+          "title": "Approval Key",
+          "type": "string"
+        },
+        "status": {
+          "description": "审批状态",
+          "enum": [
+            "approved",
+            "revoked"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "decided_by": {
+          "maxLength": 80,
+          "title": "Decided By",
+          "type": "string"
+        },
+        "expires_at": {
+          "anyOf": [
+            {
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expires At"
+        },
+        "note": {
+          "default": "",
+          "maxLength": 500,
+          "title": "Note",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "at",
+        "action_class",
+        "target_scope",
+        "effect",
+        "status",
+        "decided_by"
+      ],
+      "title": "ApprovalRecord",
+      "type": "object"
+    },
+    "CleanupItem": {
+      "description": "清理项：报告门禁要求全部处理完（状态由账本 cleanup 记录跟踪）。",
+      "properties": {
+        "action": {
+          "description": "需要执行的清理动作",
+          "title": "Action",
+          "type": "string"
+        },
+        "note": {
+          "default": "",
+          "description": "补充说明（可逆性 / 影响面）",
+          "title": "Note",
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "title": "CleanupItem",
+      "type": "object"
+    },
+    "EvidenceProposal": {
+      "description": "证据提案：Worker 只提案，入库方校验 artifact 存在性、路径与哈希。",
+      "properties": {
+        "hypothesis": {
+          "description": "所属假设 ID",
+          "title": "Hypothesis",
+          "type": "string"
+        },
+        "role": {
+          "description": "证据角色：观察 / 复现 / 影响 / 反证",
+          "enum": [
+            "observation",
+            "reproduction",
+            "impact",
+            "refutation"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "effect": {
+          "description": "证据效果：支持 / 反驳 / 上下文",
+          "enum": [
+            "supports",
+            "refutes",
+            "context"
+          ],
+          "title": "Effect",
+          "type": "string"
+        },
+        "artifact": {
+          "description": "case/artifacts/ 内的相对路径（POSIX 风格）",
+          "title": "Artifact",
+          "type": "string"
+        },
+        "sha256": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "留空时由入库方计算并校验（SHA-256）",
+          "title": "Sha256"
+        },
+        "summary": {
+          "description": "一句话摘要（不含秘密原文）",
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "hypothesis",
+        "role",
+        "effect",
+        "artifact",
+        "summary"
+      ],
+      "title": "EvidenceProposal",
+      "type": "object"
+    },
+    "EvidenceRecord": {
+      "description": "证据（v2）：可校验的原始观察或复现材料。",
+      "properties": {
+        "v": {
+          "const": 2,
+          "default": 2,
+          "description": "账本 schema 版本",
+          "title": "V",
+          "type": "integer"
+        },
+        "type": {
+          "const": "evidence",
+          "default": "evidence",
+          "title": "Type",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[EV][A-Za-z0-9._-]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "at": {
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+          "title": "At",
+          "type": "string"
+        },
+        "hypothesis": {
+          "pattern": "^H[A-Za-z0-9._-]{0,63}$",
+          "title": "Hypothesis",
+          "type": "string"
+        },
+        "role": {
+          "enum": [
+            "observation",
+            "reproduction",
+            "impact",
+            "refutation"
+          ],
+          "title": "Role",
+          "type": "string"
+        },
+        "effect": {
+          "enum": [
+            "supports",
+            "refutes",
+            "context"
+          ],
+          "title": "Effect",
+          "type": "string"
+        },
+        "artifact": {
+          "description": "case/artifacts/ 内相对路径（POSIX）",
+          "title": "Artifact",
+          "type": "string"
+        },
+        "sha256": {
+          "pattern": "^[0-9a-f]{64}$",
+          "title": "Sha256",
+          "type": "string"
+        },
+        "summary": {
+          "maxLength": 300,
+          "title": "Summary",
+          "type": "string"
+        },
+        "run": {
+          "anyOf": [
+            {
+              "pattern": "^R[A-Za-z0-9._-]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Run"
+        },
+        "actor": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Actor"
+        },
+        "observed_at": {
+          "anyOf": [
+            {
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Observed At"
+        }
+      },
+      "required": [
+        "id",
+        "at",
+        "hypothesis",
+        "role",
+        "effect",
+        "artifact",
+        "sha256",
+        "summary"
+      ],
+      "title": "EvidenceRecord",
+      "type": "object"
+    },
+    "FactProposal": {
+      "description": "事实提案：Worker 报告的新事实，入库后成为 FactRecord。",
+      "properties": {
+        "kind": {
+          "description": "事实类别（枚举已冻结）",
+          "enum": [
+            "asset",
+            "service",
+            "application",
+            "identity",
+            "credential_ref",
+            "access",
+            "vulnerability_lead",
+            "progress"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "target": {
+          "description": "归属目标标识",
+          "title": "Target",
+          "type": "string"
+        },
+        "title": {
+          "description": "短标题",
+          "title": "Title",
+          "type": "string"
+        },
+        "summary": {
+          "description": "一句话摘要",
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "target",
+        "title",
+        "summary"
+      ],
+      "title": "FactProposal",
+      "type": "object"
+    },
+    "FactRecord": {
+      "description": "已观察事实：资产 / 服务 / 身份 / 凭据引用 / 访问 / 漏洞线索 / 进展。",
+      "properties": {
+        "v": {
+          "const": 2,
+          "default": 2,
+          "description": "账本 schema 版本",
+          "title": "V",
+          "type": "integer"
+        },
+        "type": {
+          "const": "fact",
+          "default": "fact",
+          "title": "Type",
+          "type": "string"
+        },
+        "id": {
+          "description": "事实 ID（F 前缀）",
+          "pattern": "^F[A-Za-z0-9._-]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "at": {
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+          "title": "At",
+          "type": "string"
+        },
+        "kind": {
+          "description": "事实类别（枚举冻结）",
+          "enum": [
+            "asset",
+            "service",
+            "application",
+            "identity",
+            "credential_ref",
+            "access",
+            "vulnerability_lead",
+            "progress"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "target": {
+          "description": "归属目标标识",
+          "maxLength": 200,
+          "title": "Target",
+          "type": "string"
+        },
+        "title": {
+          "maxLength": 200,
+          "title": "Title",
+          "type": "string"
+        },
+        "summary": {
+          "maxLength": 500,
+          "title": "Summary",
+          "type": "string"
+        },
+        "doc_path": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "长文所在 artifacts/ 相对路径（账本只存引用）",
+          "title": "Doc Path"
+        },
+        "data": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          },
+          "default": {},
+          "description": "小型结构化载荷（不含秘密原文）",
+          "title": "Data",
+          "type": "object"
+        },
+        "relations": {
+          "default": [],
+          "description": "关系边：{\"relation\": \"...\", \"target\": \"<记录 ID>\"}",
+          "items": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "title": "Relations",
+          "type": "array"
+        },
+        "source_evidence": {
+          "default": [],
+          "description": "来源证据 ID（E 前缀）",
+          "items": {
+            "type": "string"
+          },
+          "title": "Source Evidence",
+          "type": "array"
+        },
+        "confidence": {
+          "default": 0.5,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "at",
+        "kind",
+        "target",
+        "title",
+        "summary"
+      ],
+      "title": "FactRecord",
+      "type": "object"
+    },
+    "HypothesisProposal": {
+      "description": "假设提案：确认后由入库方写入账本成为可攻击假设。",
+      "properties": {
+        "claim": {
+          "description": "可证伪的攻击假设",
+          "maxLength": 240,
+          "title": "Claim",
+          "type": "string"
+        },
+        "scope": {
+          "description": "目标范围",
+          "maxLength": 160,
+          "title": "Scope",
+          "type": "string"
+        },
+        "disprove_if": {
+          "description": "证伪条件（至少一条）",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10,
+          "minItems": 1,
+          "title": "Disprove If",
+          "type": "array"
+        }
+      },
+      "required": [
+        "claim",
+        "scope",
+        "disprove_if"
+      ],
+      "title": "HypothesisProposal",
+      "type": "object"
+    },
+    "HypothesisRecord": {
+      "description": "假设（v2）：可证伪攻击假设，confirmed 后投影为 Finding。",
+      "properties": {
+        "v": {
+          "const": 2,
+          "default": 2,
+          "description": "账本 schema 版本",
+          "title": "V",
+          "type": "integer"
+        },
+        "type": {
+          "const": "hypothesis",
+          "default": "hypothesis",
+          "title": "Type",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^H[A-Za-z0-9._-]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "at": {
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+          "title": "At",
+          "type": "string"
+        },
+        "claim": {
+          "maxLength": 500,
+          "title": "Claim",
+          "type": "string"
+        },
+        "scope": {
+          "maxLength": 200,
+          "title": "Scope",
+          "type": "string"
+        },
+        "disprove_if": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 10,
+          "minItems": 1,
+          "title": "Disprove If",
+          "type": "array"
+        },
+        "linked_facts": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Linked Facts",
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "at",
+        "claim",
+        "scope",
+        "disprove_if"
+      ],
+      "title": "HypothesisRecord",
+      "type": "object"
+    },
+    "IntentRecord": {
+      "description": "Intent 追加事件：created / claimed / completed / blocked / cancelled。",
+      "properties": {
+        "v": {
+          "const": 2,
+          "default": 2,
+          "description": "账本 schema 版本",
+          "title": "V",
+          "type": "integer"
+        },
+        "type": {
+          "const": "intent",
+          "default": "intent",
+          "title": "Type",
+          "type": "string"
+        },
+        "id": {
+          "description": "Intent ID（I 前缀）",
+          "pattern": "^I[A-Za-z0-9._-]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "at": {
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+          "title": "At",
+          "type": "string"
+        },
+        "event": {
+          "description": "事件类型",
+          "enum": [
+            "created",
+            "claimed",
+            "completed",
+            "blocked",
+            "cancelled"
+          ],
+          "title": "Event",
+          "type": "string"
+        },
+        "title": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Title"
+        },
+        "objective": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Objective"
+        },
+        "angle": {
+          "anyOf": [
+            {
+              "maxLength": 80,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "切入角度（同一目标允许多角度）",
+          "title": "Angle"
+        },
+        "target": {
+          "anyOf": [
+            {
+              "maxLength": 200,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Target"
+        },
+        "linked_facts": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Linked Facts",
+          "type": "array"
+        },
+        "priority": {
+          "default": 3,
+          "maximum": 5,
+          "minimum": 1,
+          "title": "Priority",
+          "type": "integer"
+        },
+        "timebox_minutes": {
+          "anyOf": [
+            {
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Timebox Minutes"
+        },
+        "depends_on": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Depends On",
+          "type": "array"
+        },
+        "run": {
+          "anyOf": [
+            {
+              "pattern": "^R[A-Za-z0-9._-]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Run"
+        },
+        "reason": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Reason"
+        }
+      },
+      "required": [
+        "id",
+        "at",
+        "event"
+      ],
+      "title": "IntentRecord",
+      "type": "object"
+    },
+    "NextIntent": {
+      "description": "下一步工作建议：入库后由 Commander 转正为 Intent 记录。",
+      "properties": {
+        "title": {
+          "description": "短标题",
+          "title": "Title",
+          "type": "string"
+        },
+        "objective": {
+          "description": "目标",
+          "title": "Objective",
+          "type": "string"
+        },
+        "angle": {
+          "description": "切入角度（同一目标允许多角度）",
+          "title": "Angle",
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "objective",
+        "angle"
+      ],
+      "title": "NextIntent",
+      "type": "object"
+    },
+    "ResultStatus": {
+      "description": "Worker/Verifier 执行结果状态。",
+      "enum": [
+        "done",
+        "blocked",
+        "failed",
+        "needs_verification"
+      ],
+      "title": "ResultStatus",
+      "type": "string"
+    },
+    "RunRecord": {
+      "description": "Run 追加事件：一次宿主 Worker/Verifier 执行的生命周期。",
+      "properties": {
+        "v": {
+          "const": 2,
+          "default": 2,
+          "description": "账本 schema 版本",
+          "title": "V",
+          "type": "integer"
+        },
+        "type": {
+          "const": "run",
+          "default": "run",
+          "title": "Type",
+          "type": "string"
+        },
+        "id": {
+          "description": "Run ID（R 前缀）",
+          "pattern": "^R[A-Za-z0-9._-]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "at": {
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+          "title": "At",
+          "type": "string"
+        },
+        "event": {
+          "description": "事件类型",
+          "enum": [
+            "created",
+            "completed",
+            "failed",
+            "timed_out",
+            "cancelled"
+          ],
+          "title": "Event",
+          "type": "string"
+        },
+        "intent": {
+          "anyOf": [
+            {
+              "pattern": "^I[A-Za-z0-9._-]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Intent"
+        },
+        "actor": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "执行角色标签（worker / verifier）",
+          "title": "Actor"
+        },
+        "host_task_id": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Host Task Id"
+        },
+        "lease_expires_at": {
+          "anyOf": [
+            {
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Lease Expires At"
+        },
+        "result_ref": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "结果包相对路径（results/<run>.json）",
+          "title": "Result Ref"
+        },
+        "idempotency_key": {
+          "anyOf": [
+            {
+              "maxLength": 128,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "幂等键（入库时记录在 run 完成事件上；同键重试不重复入账）",
+          "title": "Idempotency Key"
+        },
+        "usage": {
+          "anyOf": [
+            {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ]
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Usage"
+        },
+        "error": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Error"
+        }
+      },
+      "required": [
+        "id",
+        "at",
+        "event"
+      ],
+      "title": "RunRecord",
+      "type": "object"
+    },
+    "SuggestedVerdict": {
+      "description": "裁决建议：仅是建议，confirmed 必须由 Verifier 结果驱动（P2 加 provenance 硬校验）。",
+      "properties": {
+        "hypothesis": {
+          "description": "目标假设 ID",
+          "title": "Hypothesis",
+          "type": "string"
+        },
+        "status": {
+          "description": "建议的裁决状态",
+          "enum": [
+            "confirmed",
+            "killed",
+            "inconclusive",
+            "deferred",
+            "provisional"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "evidence": {
+          "description": "引用的证据 ID",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence",
+          "type": "array"
+        },
+        "reason": {
+          "description": "裁决理由",
+          "maxLength": 500,
+          "title": "Reason",
+          "type": "string"
+        }
+      },
+      "required": [
+        "hypothesis",
+        "status",
+        "evidence",
+        "reason"
+      ],
+      "title": "SuggestedVerdict",
+      "type": "object"
+    },
+    "VerdictRecord": {
+      "description": "裁决（v2）：对假设的裁决；Verifier provenance 由 verifier_run 记录。",
+      "properties": {
+        "v": {
+          "const": 2,
+          "default": 2,
+          "description": "账本 schema 版本",
+          "title": "V",
+          "type": "integer"
+        },
+        "type": {
+          "const": "verdict",
+          "default": "verdict",
+          "title": "Type",
+          "type": "string"
+        },
+        "id": {
+          "pattern": "^[EV][A-Za-z0-9._-]{0,63}$",
+          "title": "Id",
+          "type": "string"
+        },
+        "at": {
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+          "title": "At",
+          "type": "string"
+        },
+        "hypothesis": {
+          "pattern": "^H[A-Za-z0-9._-]{0,63}$",
+          "title": "Hypothesis",
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "confirmed",
+            "killed",
+            "inconclusive",
+            "deferred",
+            "provisional"
+          ],
+          "title": "Status",
+          "type": "string"
+        },
+        "evidence": {
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Evidence",
+          "type": "array"
+        },
+        "reason": {
+          "maxLength": 500,
+          "title": "Reason",
+          "type": "string"
+        },
+        "verifier_run": {
+          "anyOf": [
+            {
+              "pattern": "^R[A-Za-z0-9._-]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Verifier Run"
+        }
+      },
+      "required": [
+        "id",
+        "at",
+        "hypothesis",
+        "status",
+        "evidence",
+        "reason"
+      ],
+      "title": "VerdictRecord",
+      "type": "object"
+    },
+    "WorkerResult": {
+      "description": "Worker / Verifier 返回的结构化结果包（不直接写账本）。",
+      "properties": {
+        "schema_version": {
+          "const": 2,
+          "default": 2,
+          "description": "协议版本（当前为 2）",
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "run_id": {
+          "description": "本次 Run 的 ID（R 前缀）",
+          "pattern": "^R[A-Za-z0-9._-]{0,63}$",
+          "title": "Run Id",
+          "type": "string"
+        },
+        "intent_id": {
+          "anyOf": [
+            {
+              "pattern": "^I[A-Za-z0-9._-]{0,63}$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "所属 Intent ID（P1 可空；Intent 记录在 T-030 落地）",
+          "title": "Intent Id"
+        },
+        "idempotency_key": {
+          "description": "幂等键：由主 Agent 生成并随任务下发；同一键重试不重复入账",
+          "title": "Idempotency Key",
+          "type": "string"
+        },
+        "status": {
+          "$ref": "#/$defs/ResultStatus",
+          "description": "执行结果状态"
+        },
+        "summary": {
+          "description": "本次增量结果摘要",
+          "maxLength": 500,
+          "title": "Summary",
+          "type": "string"
+        },
+        "facts": {
+          "default": [],
+          "description": "新事实提案（P1 占位）",
+          "items": {
+            "$ref": "#/$defs/FactProposal"
+          },
+          "title": "Facts",
+          "type": "array"
+        },
+        "hypotheses": {
+          "default": [],
+          "description": "新假设提案",
+          "items": {
+            "$ref": "#/$defs/HypothesisProposal"
+          },
+          "title": "Hypotheses",
+          "type": "array"
+        },
+        "evidence": {
+          "default": [],
+          "description": "证据提案（artifact 相对路径 + 摘要）",
+          "items": {
+            "$ref": "#/$defs/EvidenceProposal"
+          },
+          "title": "Evidence",
+          "type": "array"
+        },
+        "suggested_verdicts": {
+          "default": [],
+          "description": "裁决建议（不直接成为 confirmed）",
+          "items": {
+            "$ref": "#/$defs/SuggestedVerdict"
+          },
+          "title": "Suggested Verdicts",
+          "type": "array"
+        },
+        "next_intents": {
+          "default": [],
+          "description": "下一步工作建议（不含 Worker 叙事展开）",
+          "items": {
+            "$ref": "#/$defs/NextIntent"
+          },
+          "title": "Next Intents",
+          "type": "array"
+        },
+        "deviations": {
+          "default": [],
+          "description": "偏离任务边界的记录（含原因）",
+          "items": {
+            "type": "string"
+          },
+          "title": "Deviations",
+          "type": "array"
+        },
+        "cleanup": {
+          "default": [],
+          "description": "需要清理的事项",
+          "items": {
+            "$ref": "#/$defs/CleanupItem"
+          },
+          "title": "Cleanup",
+          "type": "array"
+        },
+        "blockers": {
+          "default": [],
+          "description": "阻塞项与缺失信息",
+          "items": {
+            "type": "string"
+          },
+          "title": "Blockers",
+          "type": "array"
+        }
+      },
+      "required": [
+        "run_id",
+        "idempotency_key",
+        "status",
+        "summary"
+      ],
+      "title": "WorkerResult",
+      "type": "object"
+    }
+  }
+}

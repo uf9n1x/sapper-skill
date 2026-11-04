@@ -1,0 +1,1 @@
+reproduction log: repeated request confirms unauthenticated access to /admin on 192.0.2.10 (3/3 attempts)

@@ -1,0 +1,9 @@
+# ruff 配置（项目根）。
+# B008：typer/click 的"函数调用作为参数默认值"是官方推荐写法，按文件豁免。
+# case_ledger.py：v1 冻结基线（与快照逐字节一致，行为由回归测试锁定），
+# 风格告警豁免；语义修改只能随 v1→v2 完整迁移进行。
+exclude = [".venv", "reference", "workspace"]
+
+[lint.per-file-ignores]
+"scripts/prism/cli.py" = ["B008"]
+"scripts/case_ledger.py" = ["UP017", "PERF102"]

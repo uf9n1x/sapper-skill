@@ -1,0 +1,14 @@
+# python
+__pycache__/
+*.pyc
+.venv/
+
+# build & local
+dist/
+workspace/
+.workbuddy/
+pytest_out.txt
+ruff_out.txt
+
+# dashboard 渲染产物属派生物，可随时用 prism.py render 重建
+case/dashboard/

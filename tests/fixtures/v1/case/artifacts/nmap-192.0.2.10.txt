@@ -1,0 +1,4 @@
+Nmap scan report for 192.0.2.10 (reserved range)
+Host is up (0.001s latency).
+PORT   STATE SERVICE VERSION
+80/tcp open  http    example-httpd 2.4

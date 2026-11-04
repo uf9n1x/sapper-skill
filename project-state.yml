@@ -1,0 +1,100 @@
+schema_version: 1
+project: sapper-skill
+status: in-development
+current_phase: P4-complete
+updated_at: "2026-11-04"
+next_task: null
+in_progress: null
+blockers: []
+docs:
+  readme: README.md
+  docs_map: docs/README.md
+  requirements: docs/spec/requirements.md
+  acceptance: docs/spec/acceptance.md
+  open_questions: docs/spec/open-questions.md
+  technical_design: docs/design/technical-design.md
+  detailed_design: docs/design/PENTEST_SKILL_UPGRADE_PLAN.md
+  interfaces: docs/design/interfaces.md
+  coding_standards: docs/engineering/coding-standards.md
+  testing: docs/engineering/testing.md
+  development_plan: docs/plans/development-plan.md
+  task_breakdown: docs/plans/task-breakdown.md
+  tasks: state/TASKS.md
+  progress: state/PROGRESS.md
+  changelog: state/CHANGELOG.md
+  decisions:
+    - docs/decisions/ADR-0001-skill-host-architecture.md
+    - docs/decisions/ADR-0002-spec-driven-recovery.md
+    - docs/decisions/ADR-0003-reference-snapshots.md
+    - docs/decisions/ADR-0004-p0-skill-entry-and-naming.md
+    - docs/decisions/ADR-0005-dependency-lock.md
+    - docs/decisions/ADR-0006-host-adapters.md
+    - docs/decisions/ADR-0007-v2-state-model.md
+    - docs/decisions/ADR-0008-concurrency-and-recovery.md
+    - docs/decisions/ADR-0009-harvest-and-identity.md
+    - docs/decisions/ADR-0010-recall-and-kb.md
+    - docs/decisions/ADR-0011-offline-rendering.md
+    - docs/decisions/ADR-0012-sapper-skill-naming.md
+    - docs/decisions/ADR-0013-live-panel-and-bilingual-redesign.md
+  eval:
+    - docs/eval/T-050-protocol.md
+    - docs/eval/T-050-report.md
+    - docs/eval/T-051-dsh-acceptance.md
+  new_session_prompt: NEW_SESSION_PROMPT.md
+references:
+  index: reference/README.md
+  projects:
+    - reference/projects/sapper-v2
+    - reference/projects/nvwabase-src
+    - reference/projects/dsh-pentest-src
+    - reference/projects/dsh-redteam-model-src
+    - reference/projects/pi
+    - reference/projects/legacy-pentest-redteam
+    - reference/projects/dsh-prism-docs
+implementation:
+  code:
+    - scripts/case_ledger.py
+    - scripts/prism.py
+    - scripts/prism/__init__.py
+    - scripts/prism/models.py
+    - scripts/prism/packets.py
+    - scripts/prism/cli.py
+    - scripts/prism/state.py
+    - scripts/prism/migration.py
+    - scripts/prism/ingest.py
+    - scripts/prism/parsers.py
+    - scripts/prism/identity.py
+    - scripts/prism/recall.py
+    - scripts/prism/knowledge.py
+    - scripts/prism/render.py
+    - scripts/prism/live.py
+    - scripts/pack_skill.py
+  tests:
+    - tests/test_ledger_unit.py
+    - tests/test_ledger_cli.py
+    - tests/test_skill_authorization.py
+    - tests/test_fixture_v1.py
+    - tests/test_dependency_lock.py
+    - tests/test_prism_models.py
+    - tests/test_walking_skeleton.py
+    - tests/test_result_schema_docs.py
+    - tests/test_host_adapters.py
+    - tests/test_prism_records.py
+    - tests/test_state_replay.py
+    - tests/test_migration.py
+    - tests/test_ingest.py
+    - tests/test_harvest.py
+    - tests/test_recall_kb.py
+    - tests/test_render.py
+    - tests/test_live.py
+  adapters:
+    - references/hosts/README.md
+    - references/hosts/generic.md
+    - references/hosts/omp.md
+    - references/hosts/workbuddy.md
+    - references/hosts/dsh.md
+  fixtures:
+    - tests/fixtures/v1/case/ledger.jsonl
+  package_lock: scripts/requirements.lock
+  dev_requirements: scripts/requirements-dev.txt
+notes: "P0–P4 全部完成（230 项测试）。T-051 多宿主验收通过：omp 无头真闭环（pack→Worker→ingest→Verifier→门禁 PASS）+ workbuddy（T-021）双宿主；能力降级实测（dudesuite 单实例互斥）；打包 sapper-skill/ 32 文件结构校验与干净冒烟通过；pack/verify-pack v2 化 + prism.py verify 报告门禁正式化。dsh 交互实测 D1–D9 待用户回填（docs/eval/T-051-dsh-acceptance.md），不阻塞。项目状态： delivered，后续为增量维护。"
