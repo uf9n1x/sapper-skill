@@ -222,6 +222,22 @@ STATUS_ZH = {
     "ready": "就绪",
 }
 
+# 证据角色中英对照（攻击链步骤口径）
+ROLE_ZH = {
+    "observation": "观察",
+    "reproduction": "复现",
+    "impact": "影响",
+    "refutation": "反证",
+}
+
+# 证据角色 → 节点标记色（攻击链左轨；与关系图 _COLOR_BY_TYPE 同族）
+_ROLE_COLOR = {
+    "observation": "#46627f",
+    "reproduction": "#8a5f00",
+    "impact": "#c2451e",
+    "refutation": "#47714f",
+}
+
 
 def status_label(status: str) -> str:
     """中文优先、英文兜底的状态标签。"""
@@ -270,7 +286,24 @@ def _collect(derived: state.DerivedState) -> dict:
         record["status"] = str(verdict.get("status", "open"))
         record["is_finding"] = record["status"] == "confirmed"
         record["status_zh"] = STATUS_ZH.get(record["status"], record["status"])
+        # 攻击链视图所需的裁决明细（终结节点 + 溯源 + 理由）
+        record["verdict_reason"] = str(verdict.get("reason", ""))
+        record["verifier_run"] = str(verdict.get("verifier_run") or "")
+        record["verdict_evidence"] = list(verdict.get("evidence", []))
         hypotheses.append(record)
+    # 证据按账本顺序（追加序 = 推演序），并标注所属 Run 的执行者阶段
+    run_actor: dict[str, str] = {}
+    for run_id, run in derived.runs.items():
+        run_actor[run_id] = str(run.get("actor") or "")
+    evidence: list[dict] = []
+    for ev in derived.evidence_by_id.values():
+        item = ev.model_dump()
+        run_id = str(item.get("run") or "")
+        actor = run_actor.get(run_id, "")
+        item["stage_actor"] = actor or "commander"
+        item["stage_key"] = f"{actor or 'commander'}:{run_id or '-'}"
+        item["role_zh"] = ROLE_ZH.get(item["role"], item["role"])
+        evidence.append(item)
     intents = []
     for intent_id in sorted(derived.intents):
         entry = derived.intents[intent_id]
@@ -299,6 +332,7 @@ def _collect(derived: state.DerivedState) -> dict:
         "assets": assets,
         "services": services,
         "hypotheses": hypotheses,
+        "evidence": evidence,
         "intents": intents,
         "runs": runs,
         "approvals": approvals,
@@ -463,6 +497,157 @@ def render_mermaid(view: dict) -> str:
     lines.append("  %% 面板 dashboard.html · 黑板 board.md · 本文件 attack-graph.mmd")
     lines.append("")
     return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# kill chain（攻击链推演视图：证据按账本顺序 = 攻击叙事时间线）
+# ---------------------------------------------------------------------------
+
+_STAGE_LABEL = {
+    "worker": ("攻击执行阶段 WORKER", "Worker stage"),
+    "verifier": ("独立验证阶段 VERIFIER", "Verifier stage"),
+    "commander": ("指挥观察阶段 COMMANDER", "Commander stage"),
+}
+
+_TERMINAL = {
+    "confirmed": ("★", "FINDING 已达成", "Finding confirmed"),
+    "killed": ("✖", "KILLED 已证伪", "Hypothesis killed"),
+    "provisional": ("◐", "PROVISIONAL 暂定", "Provisional"),
+    "inconclusive": ("○", "INCONCLUSIVE 未决", "Inconclusive"),
+    "deferred": ("○", "DEFERRED 暂缓", "Deferred"),
+    "open": ("○", "OPEN 推进中", "In progress"),
+}
+
+
+def _chain_sha(sha: str) -> str:
+    return f"{sha[:6]}…{sha[-4:]}" if len(sha) >= 12 else sha
+
+
+def render_kill_chain(view: dict) -> str:
+    """把每个假设的证据序列渲染为垂直攻击链推演轨。
+
+    顺序即账本追加序 = 实际推演序；按 Run 的 actor 分阶段（Worker/Verifier），
+    终结节点是裁决（confirmed = 高亮 FINDING 封印卡）。全部内容转义，
+    标签走 data-zh/data-en 双语。
+    """
+    by_hyp: dict[str, list[dict]] = {}
+    for ev in view["evidence"]:
+        by_hyp.setdefault(ev["hypothesis"], []).append(ev)
+
+    parts: list[str] = []
+    if not view["hypotheses"]:
+        parts.append(
+            '<p class="chain-empty" data-zh="账本中尚无假设：先用 prism.py hypothesis 建账，'
+            '攻击链会随证据追加自动生长。" data-en="No hypotheses in the ledger yet: create one '
+            'with prism.py hypothesis; the kill chain grows as evidence lands.">'
+            "账本中尚无假设：先用 prism.py hypothesis 建账，攻击链会随证据追加自动生长。</p>"
+        )
+        return "\n".join(parts)
+
+    for hyp in view["hypotheses"]:
+        hyp_id = hyp["id"]
+        steps = by_hyp.get(hyp_id, [])
+        status = hyp["status"]
+        term_symbol, term_zh, term_en = _TERMINAL.get(status, _TERMINAL["open"])
+        parts.append(f'<section class="chain" id="chain-{_esc(hyp_id)}">')
+
+        # -- 链头：假设声明 + 状态 + 溯源 -----------------------------------
+        verifier_chip = (
+            f'<span class="chip chip-verifier" title="verifier_run">'
+            f'<span data-zh="验证溯源" data-en="verifier run">验证溯源</span>'
+            f" {_esc(hyp['verifier_run'])}</span>"
+            if hyp["verifier_run"]
+            else ""
+        )
+        parts.append(
+            f'<header class="chain-head">'
+            f'<div class="chain-head-row"><span class="chain-id">{_esc(hyp_id)}</span>'
+            f'<span class="st st-{_esc(status)}">{_esc(status)} {_esc(hyp["status_zh"])}</span>'
+            f"{verifier_chip}</div>"
+            f'<h3 class="chain-claim">{_esc(hyp.get("claim", ""))}</h3>'
+            f'<div class="chain-scope mono">{_esc(hyp.get("scope", ""))}</div>'
+            f"</header>"
+        )
+
+        # -- 推演轨 ----------------------------------------------------------
+        if not steps:
+            parts.append(
+                '<p class="chain-empty" data-zh="该假设暂无证据步骤。" '
+                'data-en="No evidence steps for this hypothesis yet.">'
+                "该假设暂无证据步骤。</p></section>"
+            )
+            continue
+        parts.append('<ol class="chain-steps">')
+        index = 0
+        seen_stage: str | None = None
+        for ev in steps:
+            stage = ev["stage_key"]
+            if stage != seen_stage:
+                seen_stage = stage
+                actor = ev["stage_actor"]
+                stage_zh, stage_en = _STAGE_LABEL.get(
+                    actor, (f"阶段 {actor.upper()}", f"{actor.upper()} stage")
+                )
+                parts.append(
+                    f'<li class="stage" style="--i:{index}">'
+                    f'<span class="stage-run mono">{_esc(ev.get("run") or "-")}</span>'
+                    f'<span class="stage-name" data-zh="{_esc(stage_zh)}" '
+                    f'data-en="{_esc(stage_en)}">{_esc(stage_zh)}</span></li>'
+                )
+                index += 1
+            color = _ROLE_COLOR.get(ev["role"], "#6f695e")
+            effect_badge = (
+                '<span class="chip chip-refutes" data-zh="反证 refutes" data-en="refutes">'
+                "反证 refutes</span>"
+                if ev["effect"] == "refutes"
+                else ""
+            )
+            parts.append(
+                f'<li class="step" style="--rc:{color};--i:{index}">'
+                f'<div class="marker" aria-hidden="true">{index:02d}</div>'
+                f'<div class="step-card">'
+                f'<div class="step-top">'
+                f'<span class="eid mono">{_esc(ev["id"])}</span>'
+                f'<span class="role" data-zh="{_esc(ev["role"])} {_esc(ev["role_zh"])}" '
+                f'data-en="{_esc(ev["role"])}">{_esc(ev["role"])} {_esc(ev["role_zh"])}</span>'
+                f"{effect_badge}"
+                f'<span class="chip chip-run mono">{_esc(ev.get("run") or "-")}</span>'
+                f'<time class="mono">{_esc(ev.get("at", ""))}</time>'
+                f"</div>"
+                f'<p class="step-sum">{_esc(ev.get("summary", ""))}</p>'
+                f'<div class="step-art">'
+                f'<span class="art-path mono" title="{_esc(ev.get("artifact", ""))}">'
+                f"{_esc(ev.get('artifact', ''))}</span>"
+                f'<span class="art-sha mono" title="SHA-256">{_chain_sha(str(ev.get("sha256", "")))}</span>'
+                f"</div></div></li>"
+            )
+            index += 1
+
+        # -- 终结节点：裁决 ---------------------------------------------------
+        reason = hyp.get("verdict_reason", "")
+        reason_block = (
+            f'<details class="t-reason"><summary data-zh="裁决理由 reason" '
+            f'data-en="Verdict reason">裁决理由 reason</summary><p>{_esc(reason)}</p></details>'
+            if reason
+            else ""
+        )
+        terminal_cls = "terminal " + (
+            "terminal-hit"
+            if status == "confirmed"
+            else "terminal-killed"
+            if status == "killed"
+            else ""
+        )
+        parts.append(
+            f'<li class="{terminal_cls}" style="--i:{index}">'
+            f'<div class="t-card">'
+            f'<span class="t-symbol" aria-hidden="true">{term_symbol}</span>'
+            f'<span class="t-label" data-zh="{_esc(term_zh)}" data-en="{_esc(term_en)}">'
+            f"{_esc(term_zh)}</span>"
+            f"{reason_block}</div></li>"
+        )
+        parts.append("</ol></section>")
+    return "\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -884,18 +1069,8 @@ def render_attack_graph(view: dict, out_html: Path) -> None:
             ),
             "finding" if hyp["is_finding"] else "hypothesis",
         )
-    for intent in view["intents"]:
-        add_node(
-            intent["id"],
-            f"意图 intent: {intent.get('title', intent['id'])}",
-            "intent",
-        )
-    for run in view["runs"]:
-        add_node(
-            run["id"],
-            f"执行 run {run['id']}（{status_label(run['status'])}）",
-            "run",
-        )
+    # Intent / Run 属流程机械（面板表格与攻击链分阶段已呈现），不再入攻击面图：
+    # 全部节点 = 资产 / 服务 / 假设，边 = 攻击面关系，杜绝"执行 run R1"噪音
 
     # 大图降噪：只保留与 findings/活动 intent 相关的假设子集之外全部保留
     # （当前规模直接全量；节点 > 500 时按 finding/一跳过滤，见 ADR-0011）
@@ -905,15 +1080,24 @@ def render_attack_graph(view: dict, out_html: Path) -> None:
             spec for spec in node_specs if spec[2] != "hypothesis" or spec[0] in keep
         ]
 
+    # 视觉层级（攻击面优先）：finding > 服务/资产 > 假设；字体/尺寸随类型分级
+    _NODE_SIZE = {"finding": 26, "asset": 17, "service": 17, "hypothesis": 13}
+    _NODE_FONT = {"finding": 15, "asset": 13, "service": 13, "hypothesis": 11}
     for node_id, label, type_ in node_specs:
         # C2：pyvis 的 label/title 会进入 vis-network 的 HTML tooltip，
         # 账本内容必须转义；canvas 文本形态下实体按字面显示，同样安全
         safe_label = _esc(label)
+        color = _COLOR_BY_TYPE.get(type_, "#cccccc")
         net.add_node(
             node_id,
             label=safe_label,
-            color=_COLOR_BY_TYPE.get(type_, "#cccccc"),
+            color=color,
             title=safe_label,
+            size=_NODE_SIZE.get(type_, 15),
+            font={"size": _NODE_FONT.get(type_, 12), "color": "#211e19",
+                  "face": "Microsoft YaHei UI", "vadjust": 2},
+            borderWidth=2 if type_ == "finding" else 1,
+            borderWidthSelected=3,
         )
 
     edges: list[tuple[str, str, str]] = []
@@ -937,26 +1121,25 @@ def render_attack_graph(view: dict, out_html: Path) -> None:
                         STATUS_ZH.get(hyp["status"], hyp["status"]),
                     )
                 )
-    for run in view["runs"]:
-        if run.get("intent"):
-            edges.append((run["intent"], run["id"], "执行 run"))
-    for intent in view["intents"]:
-        for fact_id in intent.get("linked_facts", []) or []:
-            node = fact_node_ids.get(fact_id)
-            if node is not None:
-                edges.append((node, intent["id"], "引用 uses"))
+    # Intent/Run 的流程边（intent→run、fact→intent）随节点一并移出攻击面图
 
     for source, target, label in edges:
         safe_edge = _esc(label)
         net.add_edge(
-            source, target, title=safe_edge,
+            source,
+            target,
+            title=safe_edge,
             label=safe_edge if label != "部署 deploy" else "",
+            color={"color": "rgba(33,30,25,.4)", "highlight": "#c2451e"},
+            font={"size": 11, "color": "#6f695e", "strokeWidth": 3,
+                  "strokeColor": "#f7f5f0"},
+            arrows={"to": {"enabled": True, "scaleFactor": 0.7}},
         )
 
     out_html.parent.mkdir(parents=True, exist_ok=True)
     net.write_html(str(out_html), notebook=False)
     _strip_external_refs(out_html)
-    _inject_graph_header(out_html)
+    _inject_graph_header(out_html, render_kill_chain(view))
 
 
 _EXTERNAL_TAG_RE = re.compile(
@@ -978,21 +1161,27 @@ def _strip_external_refs(html_path: Path) -> None:
         html_path.write_text(cleaned, encoding="utf-8", newline="\n")
 
 
-# attack-graph.html 注入的头部状态条与实时挂钩（API 用 ../api/*，离线自动退化）
+# attack-graph.html 注入的头部状态条 + 视图切换 + 攻击链（离线自动退化快照）
 _GRAPH_HEADER_HTML = """<style>
-:root { --ink: #211e19; --muted: #6f695e; --surface: #fbfaf7; --line: rgba(33,30,25,.28);
-        --accent: #c2451e; --accent-soft: rgba(194, 69, 30, .09);
-        --ok: #47714f; --warn: #8a5f00; --bg: #f2f0ea; }
-body { margin: 0; background: var(--bg); font-family: "Microsoft YaHei UI", "PingFang SC", sans-serif; }
+:root { --ink: #211e19; --muted: #6f695e; --surface: #fbfaf7; --line: rgba(33,30,25,.14);
+        --line-strong: rgba(33,30,25,.28); --accent: #c2451e; --accent-soft: rgba(194, 69, 30, .09);
+        --ok: #47714f; --warn: #8a5f00; --info: #46627f; --bg: #f2f0ea;
+        --font-display: Bahnschrift, "Segoe UI", "Microsoft YaHei UI", sans-serif;
+        --font-body: "Microsoft YaHei UI", "PingFang SC", "Segoe UI", sans-serif;
+        --font-mono: "Cascadia Mono", Consolas, "Courier New", monospace;
+        --ease-out: cubic-bezier(.16,1,.3,1);
+        --shadow-1: 0 2px 6px rgba(33,30,25,.07); --shadow-2: 0 8px 28px rgba(33,30,25,.10); }
+body { margin: 0; background: var(--bg); font-family: var(--font-body); color: var(--ink);
+  font-size: 14px; line-height: 1.7; }
 #graph-bar { position: fixed; top: 0; left: 0; right: 0; z-index: 10; min-height: 56px;
   display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 6px 18px;
-  background: var(--surface); border-bottom: 2px solid var(--ink); box-shadow: 0 8px 28px rgba(33,30,25,.10); }
-#graph-bar .brand { font-family: Bahnschrift, "Segoe UI", sans-serif; font-weight: 700;
+  background: var(--surface); border-bottom: 2px solid var(--ink); box-shadow: var(--shadow-2); }
+#graph-bar .brand { font-family: var(--font-display); font-weight: 700;
   font-size: 17px; letter-spacing: -.01em; color: var(--ink); }
 #graph-bar .brand em { font-style: normal; color: var(--accent); }
 #graph-bar .sub { color: var(--muted); font-size: 12px; }
-.badge { display: inline-flex; align-items: center; gap: 6px; font-family: Consolas, monospace;
-  font-size: 11.5px; padding: 2px 9px; border: 1px solid var(--line); border-radius: 999px;
+.badge { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono);
+  font-size: 11.5px; padding: 2px 9px; border: 1px solid var(--line-strong); border-radius: 999px;
   background: var(--surface); color: var(--muted); }
 .badge .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
 .badge.live { color: var(--ok); border-color: var(--ok); }
@@ -1002,29 +1191,134 @@ body { margin: 0; background: var(--bg); font-family: "Microsoft YaHei UI", "Pin
 .badge.error { color: var(--accent); border-color: var(--accent); }
 .badge.error .dot { background: var(--accent); }
 @keyframes gpulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
-@media (prefers-reduced-motion: reduce) { .badge.live .dot { animation: none; } }
 #graph-bar .navbtn, #graph-bar .lang {
   display: inline-flex; align-items: center; justify-content: center;
-  min-height: 44px; padding: 8px 16px; font-family: Consolas, "Cascadia Mono", monospace;
+  min-height: 44px; padding: 8px 16px; font-family: var(--font-mono);
   font-size: 11.5px; color: var(--ink); background: var(--surface);
-  border: 1px solid var(--line); border-radius: 999px; text-decoration: none;
+  border: 1px solid var(--line-strong); border-radius: 999px; text-decoration: none;
   white-space: nowrap; cursor: pointer; transition: background 160ms ease-out; }
 #graph-bar .navbtn:hover, #graph-bar .lang:hover { background: var(--accent-soft); }
-#graph-bar .navbtn:focus-visible, #graph-bar .lang:focus-visible {
+#graph-bar .navbtn:focus-visible, #graph-bar .lang:focus-visible, .seg-btn:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px; }
 /* pyvis 的 .card 是 body 直接子元素：给固定头部条留出空间。
    旧实现把节点搬进包装容器，但那段脚本早于 pyvis 节点解析，恒不生效，已移除 */
 body > .card { padding-top: 68px; }
+
+/* ============ 视图切换（攻击链 / 资产网络） ============ */
+.seg { display: inline-flex; border: 1px solid var(--line-strong); border-radius: 999px;
+  overflow: hidden; background: var(--surface); }
+.seg-btn { appearance: none; border: none; background: transparent; cursor: pointer;
+  font-family: var(--font-mono); font-size: 12px; color: var(--muted);
+  padding: 9px 18px; min-height: 44px; transition: background 160ms ease-out, color 160ms ease-out; }
+.seg-btn + .seg-btn { border-left: 1px solid var(--line-strong); }
+.seg-btn:hover { color: var(--ink); }
+.seg-btn.active { background: var(--ink); color: #fbfaf7; }
+body[data-view="chain"] > .card { display: none; }
+body[data-view="net"] > #chain-root { display: none; }
+
+/* ============ 攻击链推演轨 ============ */
+#chain-root { max-width: 980px; margin: 0 auto; padding: 84px 20px 90px; }
+.chain { margin: 0 0 44px; }
+.chain-head { background: var(--surface); border: 1px solid var(--line-strong);
+  border-left: 4px solid var(--ink); box-shadow: var(--shadow-1); padding: 16px 20px 13px; }
+.chain-head-row { display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
+  font-family: var(--font-mono); font-size: 12px; }
+.chain-id { font-family: var(--font-display); font-weight: 700; font-size: 19px; }
+.chain-head .st { display: inline-block; padding: 1px 9px; border-radius: 2px;
+  font-family: var(--font-mono); font-size: 11px; border: 1px solid var(--line-strong);
+  color: var(--muted); background: var(--surface); }
+.chain-head .st-confirmed { background: var(--accent); border-color: var(--accent); color: #fbfaf7; }
+.chain-head .st-killed { color: var(--ok); border-color: var(--ok); }
+.chip { display: inline-block; padding: 1px 8px; border-radius: 2px; font-size: 11px;
+  font-family: var(--font-mono); border: 1px solid var(--line-strong); color: var(--muted); }
+.chip-verifier { color: var(--info); border-color: var(--info); }
+.chip-refutes { color: var(--ok); border-color: var(--ok); }
+.chip-run { color: var(--info); border-color: var(--info); }
+.chain-claim { margin: 8px 0 4px; font-family: var(--font-display); font-weight: 700;
+  font-size: 18px; line-height: 1.4; letter-spacing: -.01em; }
+.chain-scope { font-size: 12px; color: var(--muted); }
+.mono { font-family: var(--font-mono); }
+
+.chain-steps { list-style: none; margin: 18px 0 0; padding: 0 0 0 34px; position: relative; }
+/* 左轨：静态底线 + 入场生长线 */
+.chain-steps::before { content: ""; position: absolute; left: 15px; top: 6px; bottom: 6px;
+  width: 2px; background: var(--line-strong); }
+.chain-steps.js-draw::after { content: ""; position: absolute; left: 15px; top: 6px; bottom: 6px;
+  width: 2px; background: var(--ink); transform-origin: top; transform: scaleY(0);
+  animation: railgrow .9s var(--ease-out) .15s forwards; }
+@keyframes railgrow { to { transform: scaleY(1); } }
+
+.chain-steps li { position: relative; margin: 0 0 12px; }
+.stage { display: flex; align-items: center; gap: 12px; margin: 22px 0 12px !important; }
+.stage-run { font-size: 11.5px; color: var(--info); border: 1px solid var(--info);
+  border-radius: 2px; padding: 0 7px; background: var(--surface); }
+.stage-name { font-family: var(--font-display); font-weight: 700; font-size: 13px;
+  letter-spacing: .08em; color: var(--muted); text-transform: uppercase; }
+.stage-name::after { content: ""; display: inline-block; width: 120px; height: 1px;
+  background: var(--line-strong); margin-left: 12px; vertical-align: middle; }
+
+.step { display: flex; gap: 14px; align-items: flex-start; }
+.step .marker { position: absolute; left: -34px; top: 10px; width: 32px; height: 32px;
+  border-radius: 50%; background: var(--rc, var(--muted)); color: #fbfaf7;
+  font-family: var(--font-display); font-weight: 700; font-size: 12.5px;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 0 0 3px var(--bg); }
+.step-card { flex: 1; background: var(--surface); border: 1px solid var(--line-strong);
+  border-left: 3px solid var(--rc, var(--muted)); box-shadow: var(--shadow-1);
+  padding: 11px 15px 10px; transition: transform 160ms var(--ease-out), box-shadow 160ms var(--ease-out); }
+.step-card:hover { transform: translateX(3px); box-shadow: var(--shadow-2); }
+.step-top { display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); }
+.step-top .eid { font-weight: 700; color: var(--ink); font-size: 12.5px; }
+.step-top .role { color: var(--rc, var(--muted)); font-weight: 600; }
+.step-top time { margin-left: auto; }
+.step-sum { margin: 6px 0 7px; line-height: 1.65; }
+.step-art { display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+  font-size: 11.5px; color: var(--muted); border-top: 1px dashed var(--line-strong); padding-top: 7px; }
+.art-path { max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.terminal .t-card { display: flex; align-items: center; flex-wrap: wrap; gap: 12px;
+  border: 2px solid var(--ink); box-shadow: var(--shadow-2); padding: 15px 20px;
+  background: var(--surface); font-family: var(--font-display); font-weight: 700; font-size: 16px; }
+.terminal-hit .t-card { background: var(--accent); border-color: var(--accent); color: #fbfaf7; }
+.terminal-hit .t-card .t-reason, .terminal-hit .t-card summary { color: #fbfaf7; }
+.terminal-killed .t-card { border-color: var(--ok); color: var(--ok); }
+.t-symbol { font-size: 20px; }
+.t-reason { flex-basis: 100%; font-family: var(--font-body); font-weight: 400; font-size: 13px; }
+.t-reason summary { cursor: pointer; font-family: var(--font-mono); font-size: 11.5px;
+  color: var(--muted); }
+.t-reason p { margin: 6px 0 0; }
+.chain-empty { background: var(--surface); border: 1px dashed var(--line-strong);
+  padding: 18px 20px; color: var(--muted); }
+
+/* 入场序列：步骤按 --i 错峰浮现（含分阶段行与终结卡） */
+#chain-root.js .chain-steps li { opacity: 0; transform: translateY(14px);
+  animation: stepin 460ms var(--ease-out) forwards; animation-delay: calc(var(--i, 0) * 70ms); }
+@keyframes stepin { to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .badge.live .dot { animation: none; }
+  .chain-steps.js-draw::after { animation: none; transform: none; }
+  #chain-root.js .chain-steps li { animation: none; opacity: 1; transform: none; }
+  .step-card:hover { transform: none; }
+}
+@media (max-width: 720px) { #chain-root { padding: 78px 12px 70px; } }
 </style>
 <div id="graph-bar">
   <span class="brand">攻击图 <em>Attack Graph</em></span>
-  <span class="sub" data-zh="sapper-skill · 节点/边由账本回放派生" data-en="sapper-skill · nodes/edges derived from ledger">sapper-skill · 节点/边由账本回放派生</span>
+  <div class="seg" role="tablist" aria-label="视图 View">
+    <button class="seg-btn active" data-view-btn="chain" role="tab" aria-selected="true"
+      data-zh="攻击链 Kill Chain" data-en="Kill Chain">攻击链 Kill Chain</button>
+    <button class="seg-btn" data-view-btn="net" role="tab" aria-selected="false"
+      data-zh="资产网络 Network" data-en="Network">资产网络 Network</button>
+  </div>
+  <span class="sub" data-zh="sapper-skill · 由账本回放派生" data-en="sapper-skill · derived from ledger replay">sapper-skill · 由账本回放派生</span>
   <span class="badge" id="graph-live"><span class="dot"></span><span id="graph-live-text">离线快照 Offline snapshot</span></span>
   <button class="lang" data-lang-toggle title="切换中英文 Switch language">EN</button>
   <a class="navbtn" href="dashboard.html" data-zh="战役面板 →" data-en="Dashboard →">战役面板 →</a>
   <a class="navbtn" href="board.md" data-zh="黑板 →" data-en="Board →">黑板 →</a>
   <a class="navbtn" href="attack-graph.mmd" data-zh="Mermaid →" data-en="Mermaid →">Mermaid →</a>
 </div>
+<div id="chain-root">/*__SAPPER_CHAIN__*/</div>
 <script>
 (function () {
   /* 整页 reload 会清空 pyvis 视口：存进 sessionStorage，回来恢复（M3） */
@@ -1050,6 +1344,44 @@ body > .card { padding-top: 68px; }
   }
   window.addEventListener('beforeunload', saveViewport);
   window.addEventListener('load', restoreViewport);
+
+  /* ---------- 视图切换：攻击链（默认）/ 资产网络 ---------- */
+  function netReady() {
+    var net = window.network;
+    if (!net) { return; }
+    try { net.redraw(); net.fit(); } catch (e) {}
+    restoreViewport();
+  }
+  function setView(view, animate) {
+    document.body.setAttribute('data-view', view);
+    var buttons = document.querySelectorAll('.seg-btn');
+    for (var i = 0; i < buttons.length; i++) {
+      var on = buttons[i].getAttribute('data-view-btn') === view;
+      buttons[i].classList.toggle('active', on);
+      buttons[i].setAttribute('aria-selected', on ? 'true' : 'false');
+    }
+    try { sessionStorage.setItem('sapper.graph.tab', view); } catch (e) {}
+    if (view === 'net') {
+      /* 隐藏容器里初始化的画布尺寸为 0：激活时重绘并复位视口 */
+      if (animate) { setTimeout(netReady, 30); } else { netReady(); }
+    }
+  }
+  var savedView = null;
+  try { savedView = sessionStorage.getItem('sapper.graph.tab'); } catch (e) {}
+  setView(savedView === 'net' ? 'net' : 'chain', false);
+  var segButtons = document.querySelectorAll('.seg-btn');
+  for (var i = 0; i < segButtons.length; i++) {
+    segButtons[i].addEventListener('click', function () {
+      setView(this.getAttribute('data-view-btn'), true);
+    });
+  }
+  /* 攻击链入场编排：JS 可用才隐藏待入场（无 JS 环境直接完整显示） */
+  var chainRoot = document.getElementById('chain-root');
+  if (chainRoot && 'querySelector' in chainRoot) {
+    chainRoot.className = 'js';
+    var steps = document.querySelector('.chain-steps');
+    if (steps) { steps.className += ' js-draw'; }
+  }
 /*__SAPPER_LIVE_JS__*/
   SapperLang.bind();
   SapperLive.start({
@@ -1064,12 +1396,13 @@ body > .card { padding-top: 68px; }
 """
 
 
-def _inject_graph_header(html_path: Path) -> None:
-    """注入头部状态条与共享实时轮询（serve 模式生效，离线自动退化）。"""
+def _inject_graph_header(html_path: Path, chain_html: str) -> None:
+    """注入头部状态条 + 视图切换 + 攻击链推演轨（serve 模式生效，离线自动退化）。"""
     html = html_path.read_text(encoding="utf-8")
     if "graph-bar" in html:
         return
     header = _GRAPH_HEADER_HTML.replace("/*__SAPPER_LIVE_JS__*/", _LIVE_JS)
+    header = header.replace("/*__SAPPER_CHAIN__*/", chain_html)
     html = html.replace("<body>", "<body>" + header, 1)
     html_path.write_text(html, encoding="utf-8", newline="\n")
 

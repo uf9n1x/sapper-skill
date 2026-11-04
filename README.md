@@ -13,7 +13,7 @@
 - **崩溃可恢复**：claim / lease 租约 + 幂等 ingest（同键重放账本逐字节不变）+ 半行尾修复（`repair`）+ 过期租约恢复（`recover`）。
 - **工具输出消化**：nmap / masscan / httpx / nuclei / 通用 JSON 五类 parser，秘密脱敏，多来源资产 identity 归一化合并（模糊相似进人工审查队列，不静默合并）。
 - **可解释召回与经验沉淀**：BM25 + 模糊 + 结构化 + 一跳图扩展的混合召回，逐项权重可解释；KB 条目带信任级别与过期警告，晋升有 confirmed + 去目标化硬门禁。
-- **离线可视化面板**：dashboard / attack-graph / board / mermaid 四产物单文件离线打开（无 CDN），`serve` 一键升级为实时面板（默认后台守护、无命令行黑窗口；账本变化自动重渲染，可随时暂停/恢复），中英双语切换、跨页保持语言/过滤词/图视口。
+- **离线可视化面板**：dashboard / attack-graph / board / mermaid 四产物单文件离线打开（无 CDN），`serve` 一键升级为实时面板（默认后台守护、无命令行黑窗口；账本变化自动重渲染，可随时暂停/恢复），中英双语切换、跨页保持语言/过滤词/图视口。攻击图默认呈现**攻击链推演视图**——假设的每一步证据按实际推演顺序展开（Worker 执行阶段 → Verifier 独立验证阶段 → 终结裁决卡），confirmed 以 ★FINDING 封印卡收束；资产网络视图只保留攻击面（资产/服务/假设），流程噪音不进图。
 - **报告门禁**：`prism.py verify` 强制 confirmed 三角色闭环（observation / reproduction / impact）且带 `verifier_run` 溯源，不通过不出报告。
 
 ## 安装
