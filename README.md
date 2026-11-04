@@ -16,6 +16,18 @@
 - **离线可视化面板**：dashboard / attack-graph / board / mermaid 四产物单文件离线打开（无 CDN），`serve` 一键升级为实时面板（默认后台守护、无命令行黑窗口；账本变化自动重渲染，可随时暂停/恢复），中英双语切换、跨页保持语言/过滤词/图视口。攻击图默认呈现**攻击链推演视图**——假设的每一步证据按实际推演顺序展开（Worker 执行阶段 → Verifier 独立验证阶段 → 终结裁决卡），confirmed 以 ★FINDING 封印卡收束；资产网络视图只保留攻击面（资产/服务/假设），流程噪音不进图。
 - **报告门禁**：`prism.py verify` 强制 confirmed 三角色闭环（observation / reproduction / impact）且带 `verifier_run` 溯源，不通过不出报告。
 
+## 效果预览
+
+以下截图来自一次真实 CTF 实战（NSSCTF 存储型 XSS → 监察 Bot 凭据外带 → JWT 伪造 → flag），由本 Skill 的 v2 控制面全程记账并渲染：
+
+**战役面板 Campaign Dashboard**——发现 / 假设 / 意图 / 执行一览，双计数徽章与状态一目了然：
+
+![战役面板](assets/screenshot-dashboard.png)
+
+**攻击链推演视图 Attack Chain**——假设声明置顶（confirmed + Verifier 溯源 chip），每一步证据按实际推演顺序展开：观察 → 复现 → 影响 → Verifier 独立复现，工件相对路径 + SHA-256 短哈希 + 时间戳齐全，终结于 ★FINDING 封印卡：
+
+![攻击链推演视图](assets/screenshot-killchain.png)
+
 ## 安装
 
 ```bash

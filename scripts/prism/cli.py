@@ -226,13 +226,24 @@ def verdict(
         "--status",
         help="confirmed|killed|inconclusive|deferred|provisional",
     ),
-    evidence: list[str] = typer.Option(..., "--evidence", help="证据 ID（可重复）"),
+    evidence: list[str] = typer.Option(
+        ...,
+        "--evidence",
+        help="证据 ID：可重复 --evidence E1 --evidence E2，或逗号分隔 --evidence E1,E2,E3",
+    ),
     reason: str = typer.Option(..., "--reason", help="裁决理由（≤500 字）"),
     verifier_run: str | None = typer.Option(
         None, "--verifier-run", help="独立 Verifier Run ID（confirmed 必填）"
     ),
 ) -> None:
     """追加 verdict 记录（v2）：confirmed 强制 verifier_run 溯源 + 三角色闭环。"""
+    # 兼容 v1 命令面写法：允许单次 --evidence 内逗号/分号/空白分隔多个 ID
+    evidence_ids = [
+        part.strip() for item in evidence for part in re.split(r"[,;\s]+", item) if part.strip()
+    ]
+    if not evidence_ids:
+        _fail("--evidence 至少需要一个证据 ID")
+        return
     try:
         _echo_record(
             records.record_verdict(
@@ -240,7 +251,7 @@ def verdict(
                 id,
                 hypothesis,
                 status,
-                list(evidence),
+                evidence_ids,
                 reason,
                 verifier_run=verifier_run,
             )

@@ -213,6 +213,7 @@ STATUS_ZH = {
     "created": "已创建",
     "claimed": "已认领",
     "in_progress": "执行中",
+    "running": "执行中",
     "completed": "已完成",
     "done": "已完成",
     "failed": "失败",
