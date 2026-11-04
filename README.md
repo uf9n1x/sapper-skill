@@ -13,7 +13,7 @@
 - **崩溃可恢复**：claim / lease 租约 + 幂等 ingest（同键重放账本逐字节不变）+ 半行尾修复（`repair`）+ 过期租约恢复（`recover`）。
 - **工具输出消化**：nmap / masscan / httpx / nuclei / 通用 JSON 五类 parser，秘密脱敏，多来源资产 identity 归一化合并（模糊相似进人工审查队列，不静默合并）。
 - **可解释召回与经验沉淀**：BM25 + 模糊 + 结构化 + 一跳图扩展的混合召回，逐项权重可解释；KB 条目带信任级别与过期警告，晋升有 confirmed + 去目标化硬门禁。
-- **离线可视化面板**：dashboard / attack-graph / board / mermaid 四产物单文件离线打开（无 CDN），`serve` 一键升级为实时面板（账本变化自动重渲染，可随时暂停/恢复），中英双语切换。
+- **离线可视化面板**：dashboard / attack-graph / board / mermaid 四产物单文件离线打开（无 CDN），`serve` 一键升级为实时面板（默认后台守护、无命令行黑窗口；账本变化自动重渲染，可随时暂停/恢复），中英双语切换、跨页保持语言/过滤词/图视口。
 - **报告门禁**：`prism.py verify` 强制 confirmed 三角色闭环（observation / reproduction / impact）且带 `verifier_run` 溯源，不通过不出报告。
 
 ## 安装
@@ -35,7 +35,11 @@ python -X utf8 scripts/prism.py hosts        # 列出可用宿主 adapter
 python -X utf8 scripts/prism.py schema --format markdown
 ```
 
-**依赖**：Python 3.10+，其余见 `scripts/requirements.lock`（uv pip compile 生成，禁止手改）。
+**依赖**：Python **3.12+**（`scripts/requirements.lock` 由 `scripts/pyproject.toml` 用 uv 编译；其中 `numpy==2.5.4` 要求 3.12，代码亦使用 3.11+ 的 `datetime.UTC`）。锁文件禁止手改，升级依赖请重新编译：
+
+```bash
+uv pip compile scripts/pyproject.toml -o scripts/requirements.lock
+```
 
 ## 快速上手
 
@@ -46,6 +50,32 @@ python -X utf8 scripts/prism.py schema --format markdown
 5. **看面板**：`python -X utf8 scripts/prism.py render <case>` 离线四产物，或 `serve <case>` 启动实时面板（默认 `http://127.0.0.1:8765`）。
 
 入口协议、角色边界与全部命令见 [SKILL.md](SKILL.md)。
+
+## 实时面板：不会弹出黑窗口
+
+```bash
+python -X utf8 scripts/prism.py serve <case>          # 后台守护，立即返回 URL/PID
+python -X utf8 scripts/prism.py serve-stop <case>     # 停止（幂等）
+python -X utf8 scripts/prism.py serve <case> --foreground   # 需要前台调试时
+```
+
+- `serve` 默认在后台启动独立进程：Windows 直接调用 `sys.base_prefix` 下的真实
+  `pythonw.exe`（GUI 子系统，配合 `DETACHED_PROCESS | CREATE_NO_WINDOW` 与
+  `SW_HIDE`），并用 `PYTHONHOME`/`PYTHONPATH` 挂回虚拟环境依赖；POSIX 用
+  `start_new_session`。**关键点**：venv 里的 `python.exe`/`pythonw.exe` 只是
+  redirector，会再拉起一个带控制台的孙进程（黑窗口来源），因此必须绕开它。
+  服务进程不创建控制台窗口；关闭启动它的终端/会话、结束 Agent 会话都不会中断面板。
+- 重复执行 `serve` 会复用已有服务（返回 `reused: true`），不会重复开进程。运行态写在案件根目录的 `serve.json`（PID/端口/URL）和 `serve.log`（日志），都是派生物，可删除；静态服务只托管 `dashboard/`，不会外泄这些文件。
+- 面板只在「**已渲染版本**」变化时刷新；暂停态不刷新，HTTP 错误 / 脏响应 / 连接断开会分别显示为「服务异常」「连接断开」而不是触发刷新风暴。双击 `file://` 打开则始终是离线快照，不发起轮询。
+- **安全**：默认只绑 `127.0.0.1`。`--host 0.0.0.0` 会把账本投影、全部产物与可写的 `/api/live` 暴露到局域网，因此**强制要求 `--token`**；返回的 URL 带 `?token=...`，首次访问下发 HttpOnly Cookie，后续相对链接与 API 请求自动携带。即便本机运行，账本内容（工具输出、目标响应）也一律经 HTML 转义，不当作可执行内容。
+
+## 测试与 CI
+
+`tests/` 是零依赖（Python 标准库 + 桩模块）的最小回归集，覆盖实时路由、版本契约、token 鉴权、模板转义、重复 id、导航与共享状态机；`tests/js/live_contract.js` 用 Node 真实执行面板的轮询控制器。GitHub Actions 在每次 push / PR 上跑编译检查与回归测试：
+
+```bash
+python -X utf8 -m unittest discover -s tests -v
+```
 
 ## 架构速览
 
@@ -69,7 +99,7 @@ scripts/prism/  确定性控制面
 | `parsers.py` + `identity.py` | 工具输出消化、秘密脱敏、资产 identity 归一化 |
 | `recall.py` + `knowledge.py` | 混合召回与 KB 晋升门禁 |
 | `render.py` + `live.py` | 离线四产物渲染与实时面板服务 |
-| `cli.py` | `prism.py` 命令面（18 命令） |
+| `cli.py` | `prism.py` 命令面（完整清单见 [SKILL.md](SKILL.md) §4） |
 
 宿主差异（子 Agent 生成语法、权限映射、降级路径）见 `references/hosts/`——按宿主选择恰好一个 adapter，无匹配时退回 `generic.md` 顺序模式。
 
@@ -82,6 +112,8 @@ scripts/prism/  确定性控制面
 | [references/hosts/](references/hosts/) | 宿主适配契约（DSH / omp / WorkBuddy / generic） |
 | [references/result-schema.md](references/result-schema.md) | Worker 结果包 JSON 契约（字段级文档） |
 | [kb/README.md](kb/README.md) | 经验知识库格式与晋升门禁 |
+| [tests/](tests/) | 零依赖最小回归测试 + 面板状态机 JS 行为验证 |
+| [scripts/pyproject.toml](scripts/pyproject.toml) | 依赖声明（`requirements.lock` 的编译源） |
 
 ## 参考项目
 

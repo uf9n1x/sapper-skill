@@ -2,13 +2,17 @@
 
 职责（与离线 render 的分工，不伪称推送）：
 - `prism.py serve` 启动本地 HTTP 服务：静态托管 dashboard/ 产物 +
-  /api/state、/api/version、/api/live 三个只读/开关端点
-- 监听线程轮询 ledger.jsonl（mtime+size 指纹），变化时自动重新
-  render_all —— 页面由前端轮询 version 并平滑 reload
-- live 开关随时切换（POST /api/live）；交互式启动时询问是否开启
-  实时可视化，非交互默认开启
+  `/api/state`、`/api/version` 两个**只读**端点 + `/api/live` 一个
+  **可写**（POST）开关端点；`/dashboard/api/*` 为旧页面缓存的兼容入口
+  （前端已统一请求 `/api/*`）
+- 监听线程轮询 ledger.jsonl（内容 SHA-256 指纹），变化时自动重新
+  render；`/api/version` 同时返回 `ledger_sha256` 与 `rendered_sha256`，
+  前端只在「已渲染版本」变化时才 reload，避免刷新到过期面板
+- live 开关随时切换（POST /api/live）；暂停期间不重渲染、前端不刷新
+- 可选 token 鉴权（非本机绑定时强制）：query/header 首次校验后下发
+  HttpOnly Cookie，相对链接与 fetch 自动携带
 - 硬约束不变：JSONL 只读；默认绑定 127.0.0.1；文件服务限制在
-  dashboard 目录内（防路径逃逸）
+  dashboard 目录内（防路径逃逸）；运行态文件写在案件根目录，不被静态托管
 """
 
 from __future__ import annotations
@@ -16,9 +20,12 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import json
+import os
+import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, quote, unquote, urlsplit
 
 from prism import render as render_module
 from prism import state as state_store
@@ -29,6 +36,7 @@ _MIME = {
     ".mmd": "text/plain; charset=utf-8",
     ".json": "application/json; charset=utf-8",
 }
+SERVE_STATE_NAME = "serve.json"
 
 
 def _now_iso() -> str:
@@ -37,6 +45,54 @@ def _now_iso() -> str:
 
 def ledger_sha256(case_path: Path) -> str:
     return hashlib.sha256((case_path / "ledger.jsonl").read_bytes()).hexdigest()
+
+
+# -- 运行态文件（案件根目录；静态托管只读 dashboard/，不会外泄） -------------
+
+
+def serve_state_path(case_path: Path) -> Path:
+    return case_path / SERVE_STATE_NAME
+
+
+def write_serve_state(case_path: Path, payload: dict) -> Path:
+    """原子写，避免父进程读到半截 JSON；临时名带 pid，避免并发互踩。"""
+    path = serve_state_path(case_path)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+            newline="\n",
+        )
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return path
+
+
+def read_serve_state(case_path: Path) -> dict | None:
+    try:
+        return json.loads(serve_state_path(case_path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def remove_serve_state(case_path: Path) -> None:
+    serve_state_path(case_path).unlink(missing_ok=True)
+
+
+def _cookie_token(cookie_header: str) -> str | None:
+    for part in cookie_header.split(";"):
+        key, _, value = part.strip().partition("=")
+        if key == "prism_token":
+            # 下发时做过 URL 编码，回传值需还原后再比较
+            return unquote(value)
+    return None
+
+
+def _tokens_equal(provided: str, expected: str) -> bool:
+    """按字节常量时间比较：str 版 compare_digest 遇非 ASCII 会抛 TypeError。"""
+    return secrets.compare_digest(provided.encode("utf-8"), expected.encode("utf-8"))
 
 
 class LivePanelServer:
@@ -49,6 +105,7 @@ class LivePanelServer:
         port: int = 8765,
         interval: float = 2.0,
         live_enabled: bool = True,
+        token: str | None = None,
     ) -> None:
         self.case_path = case_path.resolve()
         self.dashboard_dir = self.case_path / "dashboard"
@@ -56,6 +113,7 @@ class LivePanelServer:
         self.port = port
         self.interval = max(0.2, float(interval))
         self.live_enabled = live_enabled
+        self.token = token or None
         self._stop = threading.Event()
         self._lock = threading.Lock()
         self.rendered_sha: str | None = None
@@ -81,6 +139,12 @@ class LivePanelServer:
 
         self._httpd = ThreadingHTTPServer((self.host, self.port), Handler)
         self.port = self._httpd.server_address[1]
+        # 先完成基线渲染再开始监听：/api/version 首帧就有 rendered_sha256，
+        # 前端不会短暂误判为错误态
+        try:
+            self.render_if_stale(force=True)
+        except (state_store.ReplayError, render_module.RenderError, OSError):
+            pass
         self._http_thread = threading.Thread(
             target=self._httpd.serve_forever, daemon=True
         )
@@ -122,10 +186,6 @@ class LivePanelServer:
     def _poll_loop(self) -> None:
         # 账本半行写入/回放失败属瞬时状态：下个周期重试（不吞 KeyboardInterrupt）
         transient = (state_store.ReplayError, render_module.RenderError, OSError)
-        try:
-            self.render_if_stale(force=True)
-        except transient:
-            pass
         while not self._stop.wait(self.interval):
             if not self.live_enabled:
                 continue
@@ -137,7 +197,7 @@ class LivePanelServer:
     def set_live(self, enabled: bool) -> None:
         self.live_enabled = bool(enabled)
 
-    # -- HTTP ----------------------------------------------------------------
+    # -- 版本与状态 ----------------------------------------------------------
 
     def _state_payload(self) -> dict:
         derived = state_store.replay(self.case_path)
@@ -155,6 +215,52 @@ class LivePanelServer:
             "runs": [{"id": rid, **derived.runs[rid]} for rid in sorted(derived.runs)],
         }
 
+    def _version_payload(self) -> dict:
+        """轻量版本端点：只读账本字节算 hash，不做 full replay（L2/H3）。"""
+        with self._lock:
+            rendered_sha = self.rendered_sha or ""
+            rendered_at = self.rendered_at
+        return {
+            "ledger_sha256": ledger_sha256(self.case_path),
+            "rendered_sha256": rendered_sha,
+            "rendered_at": rendered_at,
+            "live_enabled": bool(self.live_enabled),
+            "now": _now_iso(),
+        }
+
+    # -- 鉴权 ---------------------------------------------------------------
+
+    def _authorized(self, handler: BaseHTTPRequestHandler) -> bool:
+        handler.prism_set_cookie = False  # type: ignore[attr-defined]
+        if not self.token:
+            return True
+        query_token = parse_qs(urlsplit(handler.path).query).get("token", [None])[0]
+        # 按「query（首次访问）→ header → cookie」顺序取第一个校验通过的来源；
+        # 只有 query token 校验通过才下发 Cookie（避免错误 query + 正确 header
+        # 时把真实 token 写进浏览器）。
+        candidates = (
+            ("query", query_token),
+            ("header", handler.headers.get("X-Prism-Token")),
+            ("cookie", _cookie_token(handler.headers.get("Cookie", "") or "")),
+        )
+        for source, provided in candidates:
+            if provided and _tokens_equal(str(provided), self.token):
+                if source == "query":
+                    handler.prism_set_cookie = True  # type: ignore[attr-defined]
+                return True
+        self._send_json(handler, {"error": "unauthorized"}, 401)
+        return False
+
+    def _maybe_cookie(self, handler: BaseHTTPRequestHandler) -> None:
+        if getattr(handler, "prism_set_cookie", False) and self.token:
+            handler.send_header(
+                "Set-Cookie",
+                f"prism_token={quote(self.token, safe='')}; "
+                "Path=/; SameSite=Strict; HttpOnly",
+            )
+
+    # -- HTTP ----------------------------------------------------------------
+
     def _send_json(
         self, handler: BaseHTTPRequestHandler, payload: dict, code: int = 200
     ) -> None:
@@ -162,33 +268,37 @@ class LivePanelServer:
         handler.send_response(code)
         handler.send_header("Content-Type", "application/json; charset=utf-8")
         handler.send_header("Content-Length", str(len(body)))
+        self._maybe_cookie(handler)
         handler.end_headers()
         handler.wfile.write(body)
 
     def _handle_get(self, handler: BaseHTTPRequestHandler) -> None:
+        if not self._authorized(handler):
+            return
         path = handler.path.split("?", 1)[0]
-        # 页面托管在 /dashboard/ 下，前端相对路径 api/* 会打到
-        # /dashboard/api/*——等价路由，避免 404 导致前端轮询永久停止
+        # M1：前端统一请求 /api/*；/dashboard/api/* 仅作旧页面缓存的兼容入口
         if path.startswith("/dashboard/api/"):
             path = path[len("/dashboard") :]
-        if path in ("/api/state", "/api/version"):
+        if path == "/api/version":
+            try:
+                payload = self._version_payload()
+            except OSError as exc:
+                self._send_json(handler, {"error": str(exc)}, 500)
+                return
+            self._send_json(handler, payload)
+            return
+        if path == "/api/state":
             try:
                 payload = self._state_payload()
             except (state_store.ReplayError, OSError) as exc:
                 self._send_json(handler, {"error": str(exc)}, 500)
                 return
-            if path == "/api/version":
-                payload = {
-                    "ledger_sha256": payload["ledger_sha256"],
-                    "rendered_at": payload["rendered_at"],
-                    "live_enabled": payload["live_enabled"],
-                    "now": payload["now"],
-                }
             self._send_json(handler, payload)
             return
-        if path == "/" or path == "/index.html":
+        if path in ("/", "/index.html"):
             handler.send_response(302)
             handler.send_header("Location", "/dashboard/dashboard.html")
+            self._maybe_cookie(handler)
             handler.end_headers()
             return
         if path.startswith("/dashboard/"):
@@ -215,10 +325,13 @@ class LivePanelServer:
             "Content-Type", _MIME.get(target.suffix, "application/octet-stream")
         )
         handler.send_header("Content-Length", str(len(body)))
+        self._maybe_cookie(handler)
         handler.end_headers()
         handler.wfile.write(body)
 
     def _handle_post(self, handler: BaseHTTPRequestHandler) -> None:
+        if not self._authorized(handler):
+            return
         path = handler.path.split("?", 1)[0]
         if path.startswith("/dashboard/api/"):
             path = path[len("/dashboard") :]

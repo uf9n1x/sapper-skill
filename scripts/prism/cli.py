@@ -8,11 +8,20 @@
 
 from __future__ import annotations
 
+import datetime as _dt
 import hashlib
 import json
+import os
 import re
+import signal
+import subprocess
 import sys
+import sysconfig
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
+from urllib.parse import quote
 
 import typer
 
@@ -685,26 +694,217 @@ def render(
     typer.echo(json.dumps(report, ensure_ascii=False))
 
 
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "0:0:0:0:0:0:0:1"}
+# token 会出现在 URL、Set-Cookie 与子进程命令行里，限定为 URL/Cookie 安全字符集
+_TOKEN_RE = re.compile(r"^[A-Za-z0-9._~-]{1,128}$")
+
+
+def _now() -> str:
+    return _dt.datetime.now(_dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _pid_alive(pid: object) -> bool:
+    """Windows 不能用 os.kill(pid, 0) 探测（会真的终止进程），需查退出码。"""
+    try:
+        value = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if value <= 0:
+        return False
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [
+            wintypes.DWORD, wintypes.BOOL, wintypes.DWORD,
+        ]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.GetExitCodeProcess.argtypes = [
+            wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD),
+        ]
+        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        handle = kernel32.OpenProcess(0x1000, False, value)  # QUERY_LIMITED_INFORMATION
+        if not handle:
+            return False
+        try:
+            code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return code.value == 259  # STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(value, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _daemon_python() -> str:
+    """返回「无控制台、且不会再 spawn 一次」的真实解释器。
+
+    uv/venv 在 Windows 上的 python.exe / pythonw.exe 是 redirector：它会
+    CreateProcess 拉起真正的解释器（实测 Popen PID ≠ 子进程 os.getpid()）。
+    孙进程不继承 CREATE_NO_WINDOW，于是每次启动都弹出命令行黑窗口。
+    这里直接定位 sys.base_prefix 下的 pythonw.exe（GUI 子系统二进制），
+    由 _daemon_env() 通过 PYTHONHOME / PYTHONPATH 挂回 venv 的依赖目录。
+    """
+    if os.name == "nt":
+        base_exe = Path(getattr(sys, "_base_executable", "") or sys.executable)
+        pythonw = base_exe.with_name("pythonw.exe")
+        if pythonw.is_file():
+            return str(pythonw)
+        if Path(sys.executable).name == "pythonw.exe":
+            return sys.executable
+    return sys.executable
+
+
+def _daemon_env() -> dict:
+    """真实解释器不认识 venv：显式指定标准库位置与 site-packages。"""
+    env = dict(os.environ)
+    if os.name == "nt" and _daemon_python() != sys.executable:
+        env["PYTHONHOME"] = sys.base_prefix
+        paths = sysconfig.get_paths()
+        candidates = [
+            paths.get("purelib", ""),
+            paths.get("platlib", ""),
+            env.get("PYTHONPATH", ""),
+        ]
+        env["PYTHONPATH"] = os.pathsep.join(
+            dict.fromkeys(p for p in candidates if p)
+        )
+    return env
+
+
+def _daemon_popen_kwargs() -> dict:
+    """脱离父控制台/会话：不会弹出命令行黑窗口，父进程退出不影响服务。"""
+    if os.name == "nt":
+        startup = subprocess.STARTUPINFO()
+        startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startup.wShowWindow = 0  # SW_HIDE（回退到 redirector 时也尽量隐藏）
+        return {
+            "creationflags": (
+                subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW
+            ),
+            "startupinfo": startup,
+            "close_fds": True,
+        }
+    return {"start_new_session": True, "close_fds": True}
+
+
+def _validate_token(token: str | None) -> str | None:
+    """仅接受 URL / Cookie / 命令行均安全的字符集，避免注入与编码歧义。"""
+    if token is None:
+        return None
+    if not _TOKEN_RE.fullmatch(token):
+        _fail("--token 只允许 A-Z a-z 0-9 . _ ~ -（1–128 位）")
+    return token
+
+
+def _probe_serve(state: dict) -> bool:
+    """确认该 PID/端口上确实是本 Skill 的实时服务（防 PID 复用误杀）。
+
+    uv 在 Windows 上用启动器 exe 拉起真正的解释器，二者 PID 不同，
+    因此身份确认靠「服务自己的版本端点」而不是父进程 PID。
+    """
+    url = state.get("version")
+    if not url and state.get("api"):
+        url = state["api"].replace("/api/state", "/api/version")
+    if not url:
+        return False
+    try:
+        with urllib.request.urlopen(url, timeout=1.5) as resp:
+            if resp.status != 200:
+                return False
+            payload = json.loads(resp.read().decode("utf-8"))
+    except (OSError, urllib.error.HTTPError, ValueError):
+        return False
+    return "ledger_sha256" in payload and "rendered_sha256" in payload
+
+
+def _kill_pid(pid: object) -> None:
+    if not _pid_alive(pid):
+        return
+    try:
+        os.kill(int(pid), signal.SIGTERM)
+    except OSError:
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(int(pid)), "/F", "/T"],
+                capture_output=True, check=False,
+            )
+
+
+def _cleanup_failed_spawn(case_path: Path, proc, log: Path, reason: str) -> None:
+    """启动失败/超时：连启动器与真实服务进程一起清理，绝不留孤儿 daemon。"""
+    from prism import live as live_module
+
+    state = live_module.read_serve_state(case_path)
+    if state:
+        _kill_pid(state.get("pid"))
+    if proc.poll() is None:
+        try:
+            proc.terminate()
+        except OSError:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            pass
+    live_module.remove_serve_state(case_path)
+    _fail(f"后台服务启动失败（{reason}），已清理残留进程；日志：{log}")
+
+
+def _wait_for_state(case_path: Path, proc, log: Path, timeout: float = 20.0) -> dict:
+    from prism import live as live_module
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        state = live_module.read_serve_state(case_path)
+        if state and state.get("port") and _pid_alive(state.get("pid")) and _probe_serve(state):
+            return state
+        if proc.poll() is not None and not state:
+            _cleanup_failed_spawn(case_path, proc, log, f"退出码 {proc.returncode}")
+        time.sleep(0.1)
+    _cleanup_failed_spawn(case_path, proc, log, "超时")
+    return {}
+
+
 @app.command()
 def serve(
     case: str = typer.Argument(help="v2 案件目录（含 ledger.jsonl）"),
     host: str = typer.Option("127.0.0.1", "--host", help="监听地址（默认仅本机）"),
-    port: int = typer.Option(8765, "--port", min=1, help="监听端口（0 = 随机）"),
+    port: int = typer.Option(8765, "--port", min=0, help="监听端口（0 = 随机）"),
     interval: float = typer.Option(
         2.0, "--interval", min=0.2, help="账本轮询间隔（秒）"
     ),
     live: bool | None = typer.Option(
         None,
         "--live/--no-live",
-        help="实时可视化开关；缺省时交互式询问，非交互默认开启",
+        help="实时可视化开关；前台模式缺省时交互式询问",
+    ),
+    token: str | None = typer.Option(
+        None, "--token", help="访问令牌；绑定到非本机地址时必填"
+    ),
+    detach: bool = typer.Option(
+        True,
+        "--detach/--foreground",
+        help="默认后台守护（无控制台窗口，命令立即返回）；--foreground 阻塞驻留",
     ),
 ) -> None:
     """实时面板：托管 dashboard 产物 + 账本监听自动重渲染（ADR-0013）。
 
-    - /dashboard/dashboard.html 全局状态页；/api/state、/api/version 供
-      前端轮询；/api/live 随时切换实时开关
-    - 账本变化自动重新 render；Ctrl-C 退出
-    - 硬约束不变：JSONL 只读，默认绑定 127.0.0.1
+    - 默认 **后台守护**：不弹控制台黑窗口，关闭启动它的终端/会话不影响面板；
+      重复调用返回既有服务；用 `serve-stop <case>` 停止
+    - /api/state、/api/version 只读，/api/live 为 POST 写开关；
+      /dashboard/api/* 是旧页面缓存的兼容入口
+    - 账本变化自动重新 render；Ctrl-C 仅对 --foreground 有效
+    - 硬约束：JSONL 只读，默认绑定 127.0.0.1；非本机绑定强制 --token
     """
     from prism import live as live_module
 
@@ -712,23 +912,169 @@ def serve(
     if not (case_path / "ledger.jsonl").is_file():
         _fail(f"案件目录缺少 ledger.jsonl: {case_path}")
         return
+    if host not in _LOOPBACK_HOSTS and not token:
+        _fail(
+            "非本机绑定会暴露账本投影与可写实时开关：必须提供 --token "
+            "（首次访问 URL 会带 ?token=... 并下发 Cookie）"
+        )
+        return
+    token = _validate_token(token)
+
+    if detach:
+        enabled = live if live is not None else True
+        existing = live_module.read_serve_state(case_path)
+        if existing and _pid_alive(existing.get("pid")) and _probe_serve(existing):
+            mismatched = []
+            if existing.get("host") != host:
+                mismatched.append("--host")
+            if port and existing.get("port") != port:
+                mismatched.append("--port")
+            if (existing.get("token") or "") != (token or ""):
+                mismatched.append("--token")
+            if bool(existing.get("live_enabled")) != enabled:
+                mismatched.append("--live")
+            if mismatched:
+                _fail(
+                    "已有实时服务参数不同（" + "、".join(mismatched) +
+                    "）：请先 `serve-stop`，再按新参数启动"
+                )
+            typer.echo(json.dumps({**existing, "reused": True}, ensure_ascii=False))
+            return
+        if existing and _pid_alive(existing.get("pid")):
+            _fail(
+                "状态文件中的进程仍在，但不是本 Skill 的实时面板（端口无响应）："
+                "可能为 PID 复用，请人工核对后删除 serve.json"
+            )
+        live_module.remove_serve_state(case_path)  # 清掉残留的过期状态文件
+        prism_script = Path(__file__).resolve().parents[1] / "prism.py"
+        cmd = [
+            _daemon_python(), "-X", "utf8", str(prism_script),
+            "serve", str(case_path), "--foreground",
+            "--host", host, "--port", str(port), "--interval", str(interval),
+            "--live" if enabled else "--no-live",
+        ]
+        if token:
+            cmd += ["--token", token]
+        log = case_path / "serve.log"
+        with log.open("ab") as logfh:
+            logfh.write(f"\n=== daemon spawn {_now()} ===\n".encode())
+            logfh.flush()
+            proc = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=logfh,
+                stderr=subprocess.STDOUT,
+                cwd=str(case_path),
+                env=_daemon_env(),
+                **_daemon_popen_kwargs(),
+            )
+        state = _wait_for_state(case_path, proc, log)
+        typer.echo(
+            json.dumps(
+                {
+                    "url": state["url"],
+                    "api": state["api"],
+                    "pid": state["pid"],
+                    "port": state["port"],
+                    "live_enabled": state["live_enabled"],
+                    "detached": True,
+                    "reused": False,
+                    "state_file": str(live_module.serve_state_path(case_path)),
+                    "log": str(log),
+                    "stop": f"python -X utf8 {prism_script} serve-stop {case_path}",
+                },
+                ensure_ascii=False,
+            )
+        )
+        return
+
     enabled = live_module.prompt_live_enabled(live)
     server = live_module.LivePanelServer(
-        case_path, host=host, port=port, interval=interval, live_enabled=enabled
+        case_path, host=host, port=port, interval=interval,
+        live_enabled=enabled, token=token,
     )
     server.start()
-    typer.echo(
-        json.dumps(
-            {
-                "url": f"http://{host if host != '0.0.0.0' else '127.0.0.1'}:{server.port}/dashboard/dashboard.html",
-                "api": f"http://127.0.0.1:{server.port}/api/state",
-                "live_enabled": server.live_enabled,
-                "interval_s": server.interval,
-            },
-            ensure_ascii=False,
+    if host == "0.0.0.0":
+        display_host = "127.0.0.1"
+    elif ":" in host and not host.startswith("["):
+        display_host = f"[{host}]"  # IPv6 地址需要方括号
+    else:
+        display_host = host
+    base = f"http://{display_host}:{server.port}"
+    token_query = f"?token={quote(token, safe='')}" if token else ""
+    state = {
+        "pid": os.getpid(),
+        "host": host,
+        "port": server.port,
+        "token": token or "",
+        "url": f"{base}/dashboard/dashboard.html{token_query}",
+        "api": f"{base}/api/state{token_query}",
+        "version": f"{base}/api/version{token_query}",
+        "live_enabled": server.live_enabled,
+        "interval_s": server.interval,
+        "started_at": _now(),
+    }
+    live_module.write_serve_state(case_path, state)
+    typer.echo(json.dumps({**state, "detached": False}, ensure_ascii=False))
+    try:
+        server.serve_forever()
+    finally:
+        live_module.remove_serve_state(case_path)
+
+
+@app.command("serve-stop")
+def serve_stop(case: str = typer.Argument(help="v2 案件目录")) -> None:
+    """停止该案件的后台实时面板（幂等；无运行实例时返回 stopped=false）。"""
+    from prism import live as live_module
+
+    case_path = Path(case).expanduser().resolve()
+    state = live_module.read_serve_state(case_path)
+    if not state:
+        typer.echo(
+            json.dumps(
+                {"stopped": False, "reason": "no active serve"}, ensure_ascii=False
+            )
         )
-    )
-    server.serve_forever()
+        return
+    pid = state.get("pid")
+    # 进程已退出：清掉残留状态即可（绝不按 PID 盲杀，避免 PID 复用误伤）
+    if not _pid_alive(pid):
+        live_module.remove_serve_state(case_path)
+        typer.echo(json.dumps(
+            {"stopped": True, "pid": pid, "terminated": False,
+             "reason": "stale state cleared"}, ensure_ascii=False,
+        ))
+        return
+    # 进程存活但不是我们的面板：保留状态供人工核对，不误杀
+    if not _probe_serve(state):
+        typer.echo(json.dumps(
+            {"stopped": False, "pid": pid,
+             "reason": "进程存活但面板不响应，状态文件保留以便重试"},
+            ensure_ascii=False,
+        ))
+        return
+    try:
+        # Windows 上 os.kill 是 TerminateProcess（硬杀），前台 finally 不会执行
+        os.kill(int(pid), signal.SIGTERM)
+    except OSError:
+        fallback = subprocess.run(
+            ["taskkill", "/PID", str(pid), "/F", "/T"],
+            capture_output=True, check=False,
+        ) if os.name == "nt" else None
+        if fallback is None or fallback.returncode != 0:
+            typer.echo(json.dumps(
+                {"stopped": False, "pid": pid,
+                 "reason": "无法终止进程，状态文件保留以便重试"},
+                ensure_ascii=False,
+            ))
+            return
+    deadline = time.time() + 5
+    while time.time() < deadline and _pid_alive(pid):
+        time.sleep(0.1)
+    live_module.remove_serve_state(case_path)
+    typer.echo(json.dumps(
+        {"stopped": True, "pid": pid, "terminated": True}, ensure_ascii=False,
+    ))
 
 
 if __name__ == "__main__":

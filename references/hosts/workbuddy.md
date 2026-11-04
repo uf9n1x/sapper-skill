@@ -40,6 +40,20 @@
 - 新会话接班：读案件目录 → 重放黑板 → 未闭环 Intent 继续；
   子 Agent 是无状态的（packet 进、result 出），无需恢复。
 
+## 可视化面板的常驻方式（serve 后台守护）
+
+- `prism.py serve <case>` **默认后台守护**：命令立即返回 URL/PID，子进程以
+  `DETACHED_PROCESS | CREATE_NO_WINDOW`（Windows）或 `start_new_session`
+  （POSIX）启动，不会弹出命令行黑窗口，也不要求会话/终端保持打开。
+- 宿主侧只需执行一次 `serve` 并把返回的 URL 交给用户；Agent 会话结束、
+  用户关闭启动它的终端/窗口，面板依旧可访问。
+- 重复执行 `serve` 会复用既有服务（返回 `reused: true`），不会重复开进程；
+  需要停止时执行 `prism.py serve-stop <case>`（幂等）。
+- 运行态文件在案件根目录：`<case>/serve.json`（PID/端口/URL，静态服务不托管）
+  与 `<case>/serve.log`（后台日志）；两者都是派生物，可随时删除。
+- 需要前台调试时用 `--foreground`（阻塞，Ctrl-C 退出）；绑定到非本机地址
+  必须额外给 `--token`。
+
 ## 实测记录
 
 - 2026-11-03（T-021 协议闭环实测，全部通过）：

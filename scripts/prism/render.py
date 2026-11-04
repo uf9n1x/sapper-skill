@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import html as html_mod
+import os
 import re
 from pathlib import Path
 
@@ -35,6 +36,162 @@ from prism.recall import _HOST_RE  # 共享主机抽取规则（归一化口径�
 _OUTPUTS = ("board.md", "dashboard.html", "attack-graph.html", "attack-graph.mmd")
 
 _NODE_SAFE_RE = re.compile(r"[^A-Za-z0-9_]")
+
+# 共享实时控制器：dashboard 与 attack-graph 注入同一份实现，避免两页对
+# 错误响应行为不一致。SAPPER_LIVE_START / SAPPER_LIVE_END 两个标记供
+# tests/js/live_contract.js 在 Node vm 中真实执行（桩 DOM/fetch/location）。
+_LIVE_JS = r"""
+/* SAPPER_LIVE_START */
+var SapperLang = (function () {
+  'use strict';
+  var KEY = 'sapper.lang';
+  function current() {
+    try { return localStorage.getItem(KEY) === 'en' ? 'en' : 'zh'; } catch (e) { return 'zh'; }
+  }
+  function apply() {
+    var lang = current();
+    var nodes = document.querySelectorAll('[data-zh]');
+    for (var i = 0; i < nodes.length; i++) {
+      var value = nodes[i].getAttribute(lang === 'zh' ? 'data-zh' : 'data-en');
+      if (value === null) continue;
+      /* 只替换首个文本节点，保留标题里的 count 等子元素（M6） */
+      var first = nodes[i].firstChild;
+      if (first && first.nodeType === 3) {
+        first.nodeValue = value;
+      } else if (document.createTextNode && nodes[i].insertBefore) {
+        nodes[i].insertBefore(document.createTextNode(value), first);
+      } else {
+        nodes[i].textContent = value;
+      }
+    }
+    document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
+    var toggles = document.querySelectorAll('[data-lang-toggle]');
+    for (var j = 0; j < toggles.length; j++) {
+      toggles[j].textContent = lang === 'zh' ? 'EN' : '中';
+    }
+    return lang;
+  }
+  function toggle() {
+    try { localStorage.setItem(KEY, current() === 'zh' ? 'en' : 'zh'); } catch (e) {}
+    apply();
+    if (typeof SapperLive !== 'undefined' && SapperLive.updateUi) SapperLive.updateUi();
+  }
+  function bind() {
+    var toggles = document.querySelectorAll('[data-lang-toggle]');
+    for (var i = 0; i < toggles.length; i++) {
+      toggles[i].addEventListener('click', toggle);
+    }
+    apply();
+  }
+  return { current: current, apply: apply, toggle: toggle, bind: bind };
+})();
+
+var SapperLive = (function () {
+  'use strict';
+  var S = {
+    on: false, served: false, known: null, status: 'offline', busy: false, timer: null
+  };
+  var opts = {};
+  var LABELS = {
+    offline: ['Offline snapshot', '离线快照 Offline snapshot'],
+    live: ['LIVE', '实时监听 Live'],
+    paused: ['Paused', '已暂停 Paused'],
+    disconnected: ['Disconnected', '连接断开 Disconnected'],
+    error: ['Service error', '服务异常 Error']
+  };
+  function el(id) { return id ? document.getElementById(id) : null; }
+  function tr(en, zh) { return SapperLang.current() === 'en' ? en : zh; }
+  function setStatus(status) {
+    S.status = status;
+    var badge = el(opts.badgeId);
+    if (badge) {
+      badge.className = 'badge' +
+        (status === 'live' ? ' live' : status === 'paused' ? ' paused' :
+         status === 'offline' ? ' offline' : ' error');
+    }
+    var label = el(opts.textId);
+    if (label) {
+      var pair = LABELS[status] || LABELS.offline;
+      label.textContent = tr(pair[0], pair[1]);
+    }
+    var btn = el(opts.toggleId);
+    if (btn) {
+      btn.hidden = status === 'offline';
+      btn.disabled = !S.served || S.busy || status === 'disconnected' || status === 'error';
+      btn.textContent = tr(S.on ? 'Pause live' : 'Resume live',
+                           S.on ? '暂停实时' : '恢复实时');
+    }
+  }
+  function updateUi() { setStatus(S.status); }
+  function validVersion(v) {
+    return v && typeof v.rendered_sha256 === 'string' && v.rendered_sha256.length > 0 &&
+      typeof v.ledger_sha256 === 'string' && v.ledger_sha256.length > 0 &&
+      typeof v.live_enabled === 'boolean';
+  }
+  function poll() {
+    /* 相对页面目录的上一级：/dashboard/x.html → /api/*（反向代理子路径同样成立） */
+    return fetch('../api/version').then(function (r) {
+      if (!r.ok) { S.served = false; setStatus('error'); return; }
+      return r.json().then(function (v) {
+        /* 500/半行/脏响应都没有完整版本字段，绝不当作版本变化 */
+        if (!validVersion(v)) { S.served = false; setStatus('error'); return; }
+        S.served = true;
+        S.on = v.live_enabled;
+        /* 暂停态：账本在变，但服务端不重渲染 → 不 reload 到旧 HTML */
+        if (v.live_enabled === false) {
+          S.known = v.rendered_sha256;
+          setStatus('paused');
+          return;
+        }
+        setStatus('live');
+        if (S.known === null) { S.known = v.rendered_sha256; return; }
+        /* 只比较「已渲染」版本：HTML 真正更新后才刷新，杜绝竞态 */
+        if (S.known !== v.rendered_sha256) {
+          if (opts.saveState) opts.saveState();
+          location.reload();
+        }
+      });
+    }).catch(function () {
+      S.served = false;
+      setStatus('disconnected');  /* 保持定时器，服务端回来后自动恢复 */
+    });
+  }
+  function postLive(enabled) {
+    if (S.busy) return Promise.resolve();
+    S.busy = true;
+    setStatus(S.status);
+    return fetch('../api/live', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: enabled })
+    }).then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    }).then(function (v) {
+      if (typeof v.live_enabled !== 'boolean') throw new Error('bad payload');
+      S.busy = false;
+      S.on = v.live_enabled;       /* 只在服务端确认后翻转，不乐观更新 */
+      setStatus(S.on ? 'live' : 'paused');
+    }).catch(function () {
+      S.busy = false;
+      S.served = false;
+      setStatus('error');          /* 失败显式报错，不静默吞掉 */
+    });
+  }
+  function start(config) {
+    opts = config || {};
+    if (opts.restoreState) opts.restoreState();
+    if (location.protocol === 'file:') { setStatus('offline'); return S; }
+    var btn = el(opts.toggleId);
+    if (btn) btn.addEventListener('click', function () { postLive(!S.on); });
+    poll();
+    S.timer = setInterval(poll, 2000);
+    return S;
+  }
+  return { state: S, start: start, poll: poll, postLive: postLive, updateUi: updateUi };
+})();
+/* SAPPER_LIVE_END */
+"""
 _COLOR_BY_TYPE = {
     "asset": "#46627f",
     "service": "#6a8f6b",
@@ -77,6 +234,16 @@ class RenderError(ValueError):
 
 def _esc(text: str) -> str:
     return html_mod.escape(str(text), quote=True)
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    """先写临时文件再原子替换：serve 并发读静态文件时不会读到半截 HTML。"""
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(content, encoding="utf-8", newline="\n")
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def _sanitize_node_id(raw: str) -> str:
@@ -163,6 +330,12 @@ def render_board(view: dict, now_iso: str) -> str:
         "",
         f"- **NOW**: {_esc(now_iso)}",
         counts_line,
+        (
+            "- 产物导航 Outputs："
+            "[dashboard.html](dashboard.html) · "
+            "[attack-graph.html](attack-graph.html) · "
+            "[attack-graph.mmd](attack-graph.mmd)"
+        ),
         "",
         "## Active Runs（活动 Run）",
         "",
@@ -201,7 +374,7 @@ def render_board(view: dict, now_iso: str) -> str:
         "",
         "## Cleanup（清理）",
         "",
-        "-（无未完成清理项；cleanup 机器状态随报告门禁在 P4 落地）",
+        "-（无未完成清理项）",
         "",
     ]
     return "\n".join(lines)
@@ -286,6 +459,8 @@ def render_mermaid(view: dict) -> str:
     if view["findings"]:
         lines.append("  classDef finding fill:#c2451e,color:#fbfaf7")
         lines.append("  class " + ",".join(view["findings"]) + " finding")
+    # 四产物导航闭环：Mermaid 注释不影响渲染
+    lines.append("  %% 面板 dashboard.html · 黑板 board.md · 本文件 attack-graph.mmd")
     lines.append("")
     return "\n".join(lines)
 
@@ -313,7 +488,7 @@ _DASHBOARD_TEMPLATE = Template(
   --accent: #c2451e;        /* 信号橙红：仅 finding 与关键动作 */
   --accent-soft: rgba(194, 69, 30, .09);
   --ok: #47714f;            /* killed/已完成 绿 */
-  --warn: #a4740f;          /* 进行中 琥珀 */
+  --warn: #8a5f00;          /* 进行中 琥珀（#fbfaf7 上 5.41:1，≥4.5:1） */
   --info: #46627f;          /* 信息蓝 */
   --radius: 3px;
   --font-display: Bahnschrift, "Bahnschrift SemiBold", "Segoe UI", "Microsoft YaHei UI", sans-serif;
@@ -377,20 +552,35 @@ h1 .en { color: var(--muted); font-weight: 300; font-size: .48em; letter-spacing
 .badge.live .dot { background: var(--ok); animation: pulse 2s var(--ease-out) infinite; }
 .badge.live { border-color: var(--ok); color: var(--ok); }
 .badge.paused { border-color: var(--warn); color: var(--warn); }
+.badge.paused .dot { background: var(--warn); }
+.badge.error { border-color: var(--accent); color: var(--accent); }
+.badge.error .dot { background: var(--accent); }
 .badge.offline .dot { background: var(--muted); }
 @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 #live-toggle {
   font: inherit; cursor: pointer; background: var(--surface); color: var(--ink);
-  border: 1px solid var(--line-strong); border-radius: 999px; padding: 3px 12px;
-  font-family: var(--font-mono); font-size: 11.5px;
+  border: 1px solid var(--line-strong); border-radius: 999px; padding: 8px 14px;
+  min-height: 44px; font-family: var(--font-mono); font-size: 11.5px;
   transition: background var(--dur-fast) ease-out, transform var(--dur-fast) ease-out;
 }
 #live-toggle:hover { background: var(--accent-soft); }
 #live-toggle:active { transform: translateY(1px); }
-#live-toggle:focus-visible, input:focus-visible, .lang:focus-visible {
+#live-toggle:disabled { opacity: .55; cursor: not-allowed; }
+#live-toggle:focus-visible, input:focus-visible, .lang:focus-visible,
+.navbtn:focus-visible {
   outline: 2px solid var(--accent); outline-offset: 2px;
 }
 #live-toggle[hidden], .lang[hidden] { display: none; }
+
+/* 导航按钮：两页共用同一语义与样式（最小 44×44 触摸目标） */
+.navbtn {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: 44px; padding: 8px 16px; text-decoration: none; white-space: nowrap;
+  font: 12px var(--font-mono); color: var(--ink); background: var(--surface);
+  border: 1px solid var(--line-strong); border-radius: var(--radius);
+  transition: background var(--dur-fast) ease-out;
+}
+.navbtn:hover { background: var(--accent-soft); }
 
 /* ============ 计数条：等宽数字 ============ */
 .stats {
@@ -424,7 +614,9 @@ h1 .en { color: var(--muted); font-weight: 300; font-size: .48em; letter-spacing
 #filter::placeholder { color: var(--muted); }
 .lang {
   font: 12px var(--font-mono); cursor: pointer; background: var(--surface);
-  border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 8px 12px;
+  border: 1px solid var(--line-strong); border-radius: var(--radius);
+  padding: 8px 14px; min-height: 44px; display: inline-flex;
+  align-items: center; justify-content: center;
   color: var(--ink); transition: background var(--dur-fast) ease-out;
 }
 .lang:hover { background: var(--accent-soft); }
@@ -499,9 +691,9 @@ body.anim.loaded .reveal { opacity: 1; transform: none; }
     <div class="rule"></div>
     <div class="masthead-meta">
       <span>NOW <b>{{ now }}</b></span>
-      <span class="badge offline" id="live-badge" data-zh-live="实时监听" data-en-live="LIVE"><span class="dot"></span><span id="live-text" data-zh="离线快照 Offline snapshot">离线快照 Offline snapshot</span></span>
-      <button id="live-toggle" hidden data-zh-pause="暂停实时" data-en-pause="Pause live" data-zh-resume="恢复实时" data-en-resume="Resume live">暂停实时</button>
-      <button class="lang" id="lang-toggle" data-zh="EN" data-en="中">EN</button>
+      <span class="badge offline" id="live-badge"><span class="dot"></span><span id="live-text">离线快照 Offline snapshot</span></span>
+      <button id="live-toggle" hidden>暂停实时</button>
+      <button class="lang" data-lang-toggle title="切换中英文 Switch language">EN</button>
     </div>
   </header>
 
@@ -514,9 +706,11 @@ body.anim.loaded .reveal { opacity: 1; transform: none; }
   </div>
 
   <div class="toolbar reveal">
-    <input id="filter" type="text" placeholder="过滤 Filter：目标 / 状态 / ID 关键词" oninput="filterTables()">
-    <a class="lang" id="nav-graph" href="attack-graph.html" title="打开攻击图 Attack graph" data-zh="攻击图 →" data-en="Attack graph →">攻击图 →</a>
-    <button class="lang" id="lang-toggle" data-zh="EN" data-en="中">EN</button>
+    <input id="filter" type="text" placeholder="过滤 Filter：目标 / 状态 / ID 关键词">
+    <a class="navbtn" href="attack-graph.html" title="打开攻击图 Attack graph">攻击图 →</a>
+    <a class="navbtn" href="board.md" title="战役黑板 Board">黑板 →</a>
+    <a class="navbtn" href="attack-graph.mmd" title="Mermaid 源 Mermaid source">Mermaid →</a>
+    <button class="lang" data-lang-toggle title="切换中英文 Switch language">EN</button>
   </div>
 
   <section class="reveal" id="sec-findings">
@@ -575,6 +769,7 @@ body.anim.loaded .reveal { opacity: 1; transform: none; }
   </section>
 
   <footer class="reveal">
+    战役黑板 Board：<a href="board.md">board.md</a> ·
     攻击图 Attack graph：<a href="attack-graph.html">attack-graph.html</a> ·
     <a href="attack-graph.mmd">attack-graph.mmd</a> ·
     <span data-zh="账本审计权威：../ledger.jsonl（只读）" data-en="Ledger authority: ../ledger.jsonl (read-only)">账本审计权威：../ledger.jsonl（只读）</span>
@@ -588,25 +783,20 @@ requestAnimationFrame(function () {
   requestAnimationFrame(function () { document.body.classList.add('loaded'); });
 });
 
-/* ---------- 中英切换（data-zh / data-en 双语） ---------- */
-var LANG = 'zh';
-function applyLang() {
-  var nodes = document.querySelectorAll('[data-zh]');
-  for (var i = 0; i < nodes.length; i++) {
-    var v = nodes[i].getAttribute(LANG === 'zh' ? 'data-zh' : 'data-en');
-    if (v !== null) nodes[i].textContent = v;
-  }
-  document.documentElement.lang = LANG === 'zh' ? 'zh-CN' : 'en';
-}
-document.getElementById('lang-toggle').addEventListener('click', function () {
-  LANG = LANG === 'zh' ? 'en' : 'zh';
-  this.textContent = LANG === 'zh' ? 'EN' : '中';
-  applyLang(); updateLiveUi();
-});
+/*__SAPPER_LIVE_JS__*/
 
+/* ---------- 跨页状态：语言 + 过滤词 ---------- */
+SapperLang.bind();
+var filterInput = document.getElementById('filter');
+function saveFilter() {
+  try { sessionStorage.setItem('sapper.filter', filterInput.value); } catch (e) {}
+}
+function restoreFilter() {
+  try { filterInput.value = sessionStorage.getItem('sapper.filter') || ''; } catch (e) {}
+}
 /* ---------- 过滤（空分区折叠 + 空态提示） ---------- */
 function filterTables() {
-  var q = document.getElementById('filter').value.toLowerCase();
+  var q = filterInput.value.toLowerCase();
   var sections = document.querySelectorAll('section');
   for (var s = 0; s < sections.length; s++) {
     var rows = sections[s].querySelectorAll('tbody tr');
@@ -619,69 +809,27 @@ function filterTables() {
     sections[s].setAttribute('data-empty', rows.length === 0 || visible === 0 ? '1' : '0');
   }
 }
-filterTables();
+filterInput.addEventListener('input', function () { saveFilter(); filterTables(); });
 
-/* ---------- 实时挂钩（serve 模式下生效；离线自动退化） ---------- */
-var LIVE = { on: false, known: null, timer: null };
-function updateLiveUi() {
-  var badge = document.getElementById('live-badge');
-  var text = document.getElementById('live-text');
-  var btn = document.getElementById('live-toggle');
-  badge.classList.remove('live', 'paused', 'offline');
-  if (!LIVE.served) {
-    badge.classList.add('offline');
-    text.textContent = LANG === 'zh' ? '离线快照 Offline snapshot' : 'Offline snapshot';
-    return;
-  }
-  btn.hidden = false;
-  if (LIVE.on) {
-    badge.classList.add('live');
-    text.textContent = LANG === 'zh' ? '实时监听 Live' : 'LIVE';
-    btn.textContent = LANG === 'zh' ? '暂停实时' : 'Pause live';
-  } else {
-    badge.classList.add('paused');
-    text.textContent = LANG === 'zh' ? '已暂停 Paused' : 'Paused';
-    btn.textContent = LANG === 'zh' ? '恢复实时' : 'Resume live';
-  }
-}
-function postLive(enabled) {
-  fetch('api/live', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ enabled: enabled })
-  }).catch(function () {});
-}
-document.getElementById('live-toggle').addEventListener('click', function () {
-  postLive(!LIVE.on); LIVE.on = !LIVE.on; updateLiveUi();
+/* ---------- 实时挂钩：两页共用同一状态机（serve 模式生效，离线自动退化） ---------- */
+SapperLive.start({
+  badgeId: 'live-badge',
+  textId: 'live-text',
+  toggleId: 'live-toggle',
+  saveState: saveFilter,
+  restoreState: restoreFilter
 });
-function pollVersion() {
-  fetch('api/version').then(function (r) { return r.json(); }).then(function (v) {
-    LIVE.served = true; LIVE.on = v.live_enabled;
-    if (LIVE.known === null) LIVE.known = v.ledger_sha256;
-    if (LIVE.known !== v.ledger_sha256) { location.reload(); return; }
-    updateLiveUi();
-  }).catch(function () {
-    /* http 模式下的失败是瞬时的（或首次探测中）：保持轮询不放弃；
-       file:// 打开根本不会进入本循环，无控制台噪音 */
-    LIVE.on = false; updateLiveUi();
-  });
-}
-if (location.protocol === 'file:') {
-  /* file:// 打开：API 不可达，直接保持离线快照，不产生轮询请求 */
-  updateLiveUi();
-} else {
-  pollVersion();
-  LIVE.timer = setInterval(pollVersion, 2000);
-}
+filterTables();
 </script>
 </body>
 </html>
-"""
+""",
+    autoescape=True,  # C2：账本里的 claim/scope/target 一律视为不可信数据
 )
 
 
 def render_dashboard(view: dict, now_iso: str) -> str:
-    return _DASHBOARD_TEMPLATE.render(
+    rendered = _DASHBOARD_TEMPLATE.render(
         now=now_iso,
         counts=view["counts"],
         hypotheses=view["hypotheses"],
@@ -689,6 +837,7 @@ def render_dashboard(view: dict, now_iso: str) -> str:
         runs=view["runs"],
         approvals=view["approvals"],
     )
+    return rendered.replace("/*__SAPPER_LIVE_JS__*/", _LIVE_JS)
 
 
 # ---------------------------------------------------------------------------
@@ -757,11 +906,14 @@ def render_attack_graph(view: dict, out_html: Path) -> None:
         ]
 
     for node_id, label, type_ in node_specs:
+        # C2：pyvis 的 label/title 会进入 vis-network 的 HTML tooltip，
+        # 账本内容必须转义；canvas 文本形态下实体按字面显示，同样安全
+        safe_label = _esc(label)
         net.add_node(
             node_id,
-            label=label,
+            label=safe_label,
             color=_COLOR_BY_TYPE.get(type_, "#cccccc"),
-            title=label,
+            title=safe_label,
         )
 
     edges: list[tuple[str, str, str]] = []
@@ -795,8 +947,10 @@ def render_attack_graph(view: dict, out_html: Path) -> None:
                 edges.append((node, intent["id"], "引用 uses"))
 
     for source, target, label in edges:
+        safe_edge = _esc(label)
         net.add_edge(
-            source, target, title=label, label=label if label != "部署 deploy" else ""
+            source, target, title=safe_edge,
+            label=safe_edge if label != "部署 deploy" else "",
         )
 
     out_html.parent.mkdir(parents=True, exist_ok=True)
@@ -824,13 +978,14 @@ def _strip_external_refs(html_path: Path) -> None:
         html_path.write_text(cleaned, encoding="utf-8", newline="\n")
 
 
-# attack-graph.html 注入的头部状态条与实时挂钩（相对路径 api/，离线自动退化）
+# attack-graph.html 注入的头部状态条与实时挂钩（API 用 ../api/*，离线自动退化）
 _GRAPH_HEADER_HTML = """<style>
 :root { --ink: #211e19; --muted: #6f695e; --surface: #fbfaf7; --line: rgba(33,30,25,.28);
-        --accent: #c2451e; --ok: #47714f; --bg: #f2f0ea; }
+        --accent: #c2451e; --accent-soft: rgba(194, 69, 30, .09);
+        --ok: #47714f; --warn: #8a5f00; --bg: #f2f0ea; }
 body { margin: 0; background: var(--bg); font-family: "Microsoft YaHei UI", "PingFang SC", sans-serif; }
-#graph-bar { position: fixed; top: 0; left: 0; right: 0; z-index: 10; height: 56px;
-  display: flex; align-items: center; gap: 18px; padding: 0 18px;
+#graph-bar { position: fixed; top: 0; left: 0; right: 0; z-index: 10; min-height: 56px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 6px 18px;
   background: var(--surface); border-bottom: 2px solid var(--ink); box-shadow: 0 8px 28px rgba(33,30,25,.10); }
 #graph-bar .brand { font-family: Bahnschrift, "Segoe UI", sans-serif; font-weight: 700;
   font-size: 17px; letter-spacing: -.01em; color: var(--ink); }
@@ -842,71 +997,80 @@ body { margin: 0; background: var(--bg); font-family: "Microsoft YaHei UI", "Pin
 .badge .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
 .badge.live { color: var(--ok); border-color: var(--ok); }
 .badge.live .dot { background: var(--ok); animation: gpulse 2s cubic-bezier(.16,1,.3,1) infinite; }
-.badge.paused { color: #a4740f; border-color: #a4740f; }
-.badge.paused .dot { background: #a4740f; }
+.badge.paused { color: var(--warn); border-color: var(--warn); }
+.badge.paused .dot { background: var(--warn); }
+.badge.error { color: var(--accent); border-color: var(--accent); }
+.badge.error .dot { background: var(--accent); }
 @keyframes gpulse { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
 @media (prefers-reduced-motion: reduce) { .badge.live .dot { animation: none; } }
-#graph-bar .navbtn { font-family: Consolas, "Cascadia Mono", monospace; font-size: 11.5px;
-  color: var(--ink); background: var(--surface); border: 1px solid var(--line);
-  border-radius: 999px; padding: 4px 13px; text-decoration: none; white-space: nowrap;
-  transition: background 160ms ease-out; }
-#graph-bar .navbtn:hover { background: rgba(194,69,30,.09); }
-#vis-wrap { padding: 68px 10px 10px; }
+#graph-bar .navbtn, #graph-bar .lang {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-height: 44px; padding: 8px 16px; font-family: Consolas, "Cascadia Mono", monospace;
+  font-size: 11.5px; color: var(--ink); background: var(--surface);
+  border: 1px solid var(--line); border-radius: 999px; text-decoration: none;
+  white-space: nowrap; cursor: pointer; transition: background 160ms ease-out; }
+#graph-bar .navbtn:hover, #graph-bar .lang:hover { background: var(--accent-soft); }
+#graph-bar .navbtn:focus-visible, #graph-bar .lang:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; }
+/* pyvis 的 .card 是 body 直接子元素：给固定头部条留出空间。
+   旧实现把节点搬进包装容器，但那段脚本早于 pyvis 节点解析，恒不生效，已移除 */
+body > .card { padding-top: 68px; }
 </style>
 <div id="graph-bar">
   <span class="brand">攻击图 <em>Attack Graph</em></span>
-  <span class="sub">sapper-skill · 节点/边由账本回放派生</span>
+  <span class="sub" data-zh="sapper-skill · 节点/边由账本回放派生" data-en="sapper-skill · nodes/edges derived from ledger">sapper-skill · 节点/边由账本回放派生</span>
   <span class="badge" id="graph-live"><span class="dot"></span><span id="graph-live-text">离线快照 Offline snapshot</span></span>
-  <a class="navbtn" href="dashboard.html" title="返回战役面板 Dashboard">战役面板 →</a>
-</div>
-<div id="vis-wrap">
+  <button class="lang" data-lang-toggle title="切换中英文 Switch language">EN</button>
+  <a class="navbtn" href="dashboard.html" data-zh="战役面板 →" data-en="Dashboard →">战役面板 →</a>
+  <a class="navbtn" href="board.md" data-zh="黑板 →" data-en="Board →">黑板 →</a>
+  <a class="navbtn" href="attack-graph.mmd" data-zh="Mermaid →" data-en="Mermaid →">Mermaid →</a>
 </div>
 <script>
 (function () {
-  var wrap = document.getElementById('vis-wrap');
-  var bar = document.getElementById('graph-bar');
-  var children = Array.prototype.slice.call(document.body.children);
-  for (var i = 0; i < children.length; i++) {
-    var el = children[i];
-    if (el !== bar && el.tagName !== 'SCRIPT' && el.id !== 'vis-wrap' && el.tagName !== 'STYLE') {
-      wrap.appendChild(el);
-    }
-  }
-  var known = null;
-  var timer = null;
-  function poll() {
-    fetch('api/version').then(function (r) { return r.json(); }).then(function (v) {
-      var badge = document.getElementById('graph-live');
-      var text = document.getElementById('graph-live-text');
-      if (known === null) known = v.ledger_sha256;
-      if (known !== v.ledger_sha256) { location.reload(); return; }
-      badge.classList.remove('live', 'paused');
-      if (v.live_enabled === false) {
-        badge.classList.add('paused');
-        text.textContent = '已暂停 PAUSED';
-      } else {
-        badge.classList.add('live');
-        text.textContent = '实时监听 LIVE';
+  /* 整页 reload 会清空 pyvis 视口：存进 sessionStorage，回来恢复（M3） */
+  function saveViewport() {
+    try {
+      var net = window.network;
+      if (net && net.getViewPosition) {
+        sessionStorage.setItem('sapper.graph.view', JSON.stringify({
+          position: net.getViewPosition(), scale: net.getScale()
+        }));
       }
-    }).catch(function () {
-      /* http 模式下失败是瞬时的：保持轮询；file:// 不会启动轮询，无噪音 */
-    });
+    } catch (e) {}
   }
-  if (location.protocol !== 'file:') {
-    poll();
-    timer = setInterval(poll, 2000);
+  function restoreViewport() {
+    try {
+      var raw = sessionStorage.getItem('sapper.graph.view');
+      var net = window.network;
+      if (raw && net && net.moveTo) {
+        var v = JSON.parse(raw);
+        net.moveTo({ position: v.position, scale: v.scale, animation: false });
+      }
+    } catch (e) {}
   }
+  window.addEventListener('beforeunload', saveViewport);
+  window.addEventListener('load', restoreViewport);
+/*__SAPPER_LIVE_JS__*/
+  SapperLang.bind();
+  SapperLive.start({
+    badgeId: 'graph-live',
+    textId: 'graph-live-text',
+    toggleId: null,
+    saveState: saveViewport,
+    restoreState: function () {}
+  });
 })();
 </script>
 """
 
 
 def _inject_graph_header(html_path: Path) -> None:
-    """注入头部状态条与实时轮询（serve 模式生效，离线自动退化）。"""
+    """注入头部状态条与共享实时轮询（serve 模式生效，离线自动退化）。"""
     html = html_path.read_text(encoding="utf-8")
     if "graph-bar" in html:
         return
-    html = html.replace("<body>", "<body>" + _GRAPH_HEADER_HTML, 1)
+    header = _GRAPH_HEADER_HTML.replace("/*__SAPPER_LIVE_JS__*/", _LIVE_JS)
+    html = html.replace("<body>", "<body>" + header, 1)
     html_path.write_text(html, encoding="utf-8", newline="\n")
 
 
@@ -926,8 +1090,14 @@ def render_all(case_path: Path, out_dir: Path | None, now_iso: str) -> dict:
         "attack-graph.mmd": render_mermaid(view),
     }
     for name, content in outputs.items():
-        (target_dir / name).write_text(content, encoding="utf-8", newline="\n")
-    render_attack_graph(view, target_dir / "attack-graph.html")
+        _atomic_write_text(target_dir / name, content)
+    # pyvis 的 check_html 要求文件名以 .html 结尾，临时名必须保留该后缀
+    graph_tmp = target_dir / f"attack-graph.{os.getpid()}.tmp.html"
+    try:
+        render_attack_graph(view, graph_tmp)
+        os.replace(graph_tmp, target_dir / "attack-graph.html")
+    finally:
+        graph_tmp.unlink(missing_ok=True)
     return {
         "out_dir": str(target_dir),
         "files": list(outputs) + ["attack-graph.html"],

@@ -12,3 +12,7 @@ ruff_out.txt
 
 # dashboard 渲染产物属派生物，可随时用 prism.py render 重建
 case/dashboard/
+
+# serve 后台守护运行态（案件目录下，不属于 Skill 内容）
+serve.json
+serve.log
