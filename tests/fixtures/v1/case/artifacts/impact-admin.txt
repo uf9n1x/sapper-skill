@@ -1,1 +1,0 @@
-impact note: unauthenticated admin panel allows user listing and config export; no writes attempted (minimal-verification policy)

@@ -1,6 +1,0 @@
-GET /admin HTTP/1.1
-Host: target.example.com
-
-HTTP/1.1 200 OK
-Content-Type: text/html
-(unauthenticated admin panel observed)

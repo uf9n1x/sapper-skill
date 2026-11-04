@@ -46,6 +46,6 @@
 
 ## 实测记录
 
-- 2026-11-03：E2E 测试 `tests/test_walking_skeleton.py` 闭环通过
+- 2026-11-03：端到端闭环测试通过（pack → worker → ingest → verdict → 门禁）
   （pack → Result 校验 → 入库 → verify-pack → confirmed → 报告门禁）；
   同日 WorkBuddy 实测中，impact 阶段以本模式顺序扮演完成，门禁先拒后放行为符合预期。

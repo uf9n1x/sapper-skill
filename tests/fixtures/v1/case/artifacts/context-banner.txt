@@ -1,1 +1,0 @@
-context: service banner and header inventory for target.example.com

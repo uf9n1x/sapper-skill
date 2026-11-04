@@ -56,7 +56,7 @@ dsh-prism 以**双 Agent 预设**承载 Prism 角色（cordis patch 挂载）：
     commander/worker/tools/runtime 与 scope guard 结构完整。
   - **preset 未挂载**：两个 profile 的 `cordis.patch.yml` 均无 prism 引用，
     交互实测前置条件未满足；协议与判定标准见
-    `docs/eval/T-051-dsh-acceptance.md`（D1–D9，待用户执行后回填）。
+    验收协议（挂载准备、步骤 D1–D9 与判定标准，待执行后回填）。
   - 宿主 MCP 生态实测：DSH Desktop 持有 DudeSuite MCP 单实例互斥锁
     （stdio），omp 侧拉起即退出——**dudesuite MCP 不能同时挂 dsh 与 omp**；
     yakit MCP 无此限制（omp 侧 connected，55 工具）。

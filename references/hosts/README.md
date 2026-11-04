@@ -6,7 +6,7 @@
 
 ## Adapter 契约
 
-每个 `<host>.md` 必须定义以下小节（测试 `tests/test_host_adapters.py` 强制）：
+每个 `<host>.md` 必须定义以下小节：
 
 | 小节 | 必须回答的问题 |
 |---|---|
@@ -38,5 +38,5 @@
 | [workbuddy.md](workbuddy.md) | WorkBuddy 桌面 | 原生子 Agent（Agent 工具） | ✅ 已实测（T-021，闭环通过） |
 | [dsh.md](dsh.md) | DSH Desktop（dsh-prism 插件） | `prism_spawn` 控制工具 | 📄 文档就绪，实测按设计排期 P4 |
 
-> 新增宿主：复制本契约，新建 `<host>.md`，在本表登记，并补 `tests/test_host_adapters.py`
+> 新增宿主：复制本契约，新建 `<host>.md`，在本表登记
 > 的注册表断言。

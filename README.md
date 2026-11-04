@@ -77,13 +77,11 @@ scripts/prism/  确定性控制面
 
 | 文档 | 内容 |
 |---|---|
-| [SKILL.md](SKILL.md) | Skill 入口：授权 Gate、角色协议、命令面 |
-| [docs/spec/](docs/spec/) | 需求、验收标准、开放问题 |
-| [docs/design/](docs/design/) | 技术设计、接口协议、升级方案 |
-| [docs/engineering/](docs/engineering/) | 编码与提交规范、测试策略 |
-| [docs/decisions/](docs/decisions/) | 13 篇 ADR 设计决策记录 |
-| [docs/eval/](docs/eval/) | DVWA 对比评测协议与报告、多宿主验收 |
+| [SKILL.md](SKILL.md) | Skill 入口：授权 Gate、角色协议、证据纪律、全部命令 |
+| [playbooks/](playbooks/) | 五阶段角色手册：reason / explore / verify / report / focused |
 | [references/hosts/](references/hosts/) | 宿主适配契约（DSH / omp / WorkBuddy / generic） |
+| [references/result-schema.md](references/result-schema.md) | Worker 结果包 JSON 契约（字段级文档） |
+| [kb/README.md](kb/README.md) | 经验知识库格式与晋升门禁 |
 
 ## 参考项目
 

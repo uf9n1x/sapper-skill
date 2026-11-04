@@ -94,11 +94,7 @@ REPORT 阶段先运行 `prism.py verify <case>`（v2 报告门禁）：全部 co
 
 ## 7. 硬约束
 
-- 未实现的能力不宣称：v2 控制面（Fact/Intent/Run、claim/lease、幂等 ingest、召回、KB、离线面板）已交付（P0–P3，见 `docs/plans/development-plan.md`）；P4 实战评测与多宿主验收进行中，未实测的宿主按 `generic` adapter 顺序模式降级运行。
+- 未实现的能力不宣称：未实测的宿主按 `generic` adapter 顺序模式降级运行；缺失能力以 `blocked` 状态如实上报，不重试、不虚构。
 - 不支持黑灰产或任何未授权目标。
 - Windows/Unix 工具差异按宿主能力降级；禁止虚构工具输出。
 - 示例与测试一律使用保留地址（192.0.2.0/24、example.com 等）。
-
-## 8. 开发状态与恢复（项目开发期专用）
-
-本 Skill 处于 P4 实战评测期。开发会话按顺序恢复上下文：`README.md` → `docs/README.md` → spec/design/plans 文档 → `state/TASKS.md`。任务事实源为 `docs/plans/task-breakdown.md`，进度日志为 `state/PROGRESS.md`，冷启动提示词见 `NEW_SESSION_PROMPT.md`。
