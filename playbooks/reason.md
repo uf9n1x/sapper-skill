@@ -14,6 +14,7 @@
    - 一次只聚焦一个假设；同目标允许多角度（后续 Intent 的 `angle`，T-030）。
 4. **派单**：`prism.py pack <case> --hypothesis H...` 装配 Worker 包，
    生成 `run_id` / `idempotency_key` 随任务下发（P1 无 Run 记录，规则先在提示词中传递）。
+   **小 Run 拆分**：一个 Worker Run 只覆盖一小段动作（一个探测面/一条利用链），返回即入账再派下一个；禁止把整个探索阶段打包进一个大 Run——面板与攻击链只在账本写入时更新，大 Run 会让可视化退化为事后快照。
 5. **入账（唯一入库者）**：Worker 返回 Result 后，主 Agent 校验并追加：
    - 结果包 → `prism.py ingest <case> --result results/<run>.json`（幂等，evidence 哈希由脚本计算并校验）；
    - 亲自观察的 evidence 提案 → `prism.py evidence ...`；hypotheses 提案 → `prism.py hypothesis ...`；

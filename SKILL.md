@@ -23,7 +23,7 @@ agent_created: true
 
 ### Focused validation（默认，单目标 / 单假设）
 
-按 `playbooks/focused.md` 走最小闭环；**第一步建案件（`prism.py intent`）后立即 `prism.py serve` 启动可视化面板并告知用户 URL**，之后全程只通过 v2 命令写账本，不创建另一套 tracker。`serve` 默认**后台守护**（命令立即返回、无命令行黑窗口），关闭启动它的终端/会话不影响面板；重复调用返回既有服务，用 `serve-stop` 停止。
+按 `playbooks/focused.md` 走最小闭环；**第一步建案件（`prism.py intent`）后立即 `prism.py serve` 启动可视化面板并告知用户 URL**，之后全程只通过 v2 命令写账本，不创建另一套 tracker。**账本节奏 = 动作节奏**：每个探测动作（一次扫描、一次请求、一条发现）完成后立即落盘 artifact 并追加 evidence，再执行下一个动作；禁止先跑完全部动作再集中补账——面板与攻击链的实时性完全由写入时机决定，补账等于让用户全程看空面板。`serve` 默认**后台守护**（命令立即返回、无命令行黑窗口），关闭启动它的终端/会话不影响面板；重复调用返回既有服务，用 `serve-stop` 停止。
 
 ### Engagement mode（多资产、长时评估）
 
@@ -99,6 +99,7 @@ v1 不校验三角色闭环与 verifier_run，confirmed 不可信。历史案件
 - Scanner 告警不得直接作为 confirmed；原始输出先存 artifact 并计算 SHA-256。
 - 证据 artifact 必须是 case 内相对路径；绝对路径与路径逃逸一律被拒绝。
 - Worker 建议的 confirmed 不直接成为 confirmed；必须经独立 Verifier 复核。
+- **边做边记**：evidence 追加与探测动作一一对应、即时入账；批量补账让面板退化为事后快照，禁止。真子 Agent 模式按小 Run 拆分派单（一个 Run 覆盖一小段动作），Worker 返回即 ingest，不合并大包。
 
 ## 6. 报告门禁
 

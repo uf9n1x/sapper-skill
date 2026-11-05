@@ -30,7 +30,9 @@
    ```
    把生成的 `case/packets/worker-H1.md` 作为 Worker 的任务上下文。
 6. **Explore（Worker）**：按 `explore.md` 执行；原始输出全部落盘 `case/artifacts/`，结果包写入 `case/results/R1.json`。
+   **主 Agent 顺序扮演 Worker 时，动作与入账交错**：每完成一个动作（一次扫描/请求/利用尝试）立即执行第 7 步追加该条 evidence（`--run R1`），再开始下一个动作；禁止先跑完全部动作再集中补账——面板和攻击链只在账本写入时更新，补账 = 用户全程看空面板。
 7. **入账**：主 Agent 是唯一入库者。
+   真子 Agent 模式：按小 Run 拆分派单（一个 Run 覆盖一小段动作），Worker 返回即 ingest，不把多个阶段打包进一个大 Run。
    ```bash
    python -X utf8 scripts/prism.py ingest <case> --result results/R1.json
    ```
@@ -40,7 +42,7 @@
    python -X utf8 scripts/prism.py evidence <case> --hypothesis H1 --run R1 \
      --role observation --effect supports --artifact artifacts/<file> --summary "<短摘要>"
    ```
-8. **Verify**：认领独立 Verifier Run，按 `verify.md` 装配 `verify-pack`，独立复现（不读 Worker 叙事），结果包 `results/R2.json` 后 ingest：
+8. **Verify**：认领独立 Verifier Run，按 `verify.md` 装配 `verify-pack`，独立复现（不读 Worker 叙事），结果包 `results/R2.json` 后 ingest。复核同样**边做边记**：每复现一条就先 ingest/追加该条证据，再复核下一条。
    ```bash
    python -X utf8 scripts/prism.py claim <case> --intent I1 --run R2 --actor verifier
    python -X utf8 scripts/prism.py verify-pack <case> --hypothesis H1
