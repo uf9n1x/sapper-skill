@@ -27,6 +27,10 @@
 ## 权限映射
 
 - 动作组审批、越界默认不执行等 Core 纪律原样生效。
+- **Git Bash (MSYS) 注意**：以 `/` 开头的参数（如 `--claim "/view/<uuid> …"`）
+  会被 MSYS 自动转成 Windows 路径（`C:/…/PortableGit/view/<uuid>`）污染账本。
+  调用 `prism.py` 时必须加 `MSYS_NO_PATHCONV=1`（PowerShell 不受影响）；
+  即使漏加，控制面也会在写入时拒绝含磁盘路径的自由文本。
 - 工具按**能力**描述（HTTP 客户端、文件读写、命令执行），由宿主任意具备该
   能力的机制承担；Core 不点名工具。
 
@@ -46,6 +50,6 @@
 
 ## 实测记录
 
-- 2026-11-03：端到端闭环测试通过（pack → worker → ingest → verdict → 门禁）
+- 2026-11-03：E2E 测试 `tests/test_walking_skeleton.py` 闭环通过
   （pack → Result 校验 → 入库 → verify-pack → confirmed → 报告门禁）；
   同日 WorkBuddy 实测中，impact 阶段以本模式顺序扮演完成，门禁先拒后放行为符合预期。

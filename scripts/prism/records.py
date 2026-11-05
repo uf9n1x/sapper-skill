@@ -12,6 +12,7 @@ v1 命令，v2 门禁形同虚设）。本模块提供与 v1 同名的命令面�
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 
 from filelock import FileLock
@@ -46,6 +47,25 @@ def _replay_or_fail(case: Path) -> state.DerivedState:
         raise IngestError(f"case ledger replay failed: {exc}") from exc
 
 
+_LOCAL_PATH_RE = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:[\\/]")
+
+
+def _reject_local_paths(fields: dict[str, object]) -> None:
+    """自由文本不得含本机磁盘路径（防敏感路径经账本渲染进报告/图）。
+
+    典型来源：Git Bash (MSYS) 会把以 / 开头的参数自动转成 Windows 路径
+    （/view/<uuid> → C:/.../PortableGit/view/<uuid>）。仅写入时校验，
+    历史账本回放不受影响。
+    """
+    for field, value in fields.items():
+        if isinstance(value, str) and _LOCAL_PATH_RE.search(value):
+            sample = value if len(value) <= 60 else value[:57] + "..."
+            raise IngestError(
+                f"{field} 含本机磁盘路径（{sample}），拒绝入账以防敏感路径泄露；"
+                "Git Bash 环境调用请加 MSYS_NO_PATHCONV=1，或改用相对/URL 表述"
+            )
+
+
 def record_intent(
     case: Path,
     intent_id: str | None,
@@ -60,6 +80,10 @@ def record_intent(
     """追加 intent created 事件（案件不存在时自动初始化）。"""
     case = ensure_case(case)
     moment = now or now_z()
+    _reject_local_paths(
+        {"intent.title": title, "intent.objective": objective,
+         "intent.target": target, "intent.angle": angle}
+    )
     with FileLock(str(case / _LOCK_RELATIVE)):
         derived = _replay_or_fail(case)
         resolved_id = intent_id or _next_id(set(derived.intents), "I")
@@ -99,6 +123,11 @@ def record_hypothesis(
     if not (case / "ledger.jsonl").is_file():
         raise IngestError("case has no ledger; create an intent first")
     moment = now or now_z()
+    _reject_local_paths(
+        {"hypothesis.claim": claim, "hypothesis.scope": scope,
+         **{f"hypothesis.disprove_if[{i}]": item
+            for i, item in enumerate(disprove_if) if isinstance(item, str)}}
+    )
     with FileLock(str(case / _LOCK_RELATIVE)):
         derived = _replay_or_fail(case)
         resolved_id = hypothesis_id or _next_id(set(derived.hypotheses), "H")
@@ -138,6 +167,7 @@ def record_evidence(
     case = Path(case)
     if not (case / "ledger.jsonl").is_file():
         raise IngestError("case has no ledger; create an intent first")
+    _reject_local_paths({"evidence.summary": summary})
     normalized = artifact.replace("\\", "/")
     artifact_path = case / normalized
     if (
@@ -196,6 +226,7 @@ def record_verdict(
         raise IngestError("case has no ledger; create an intent first")
     if status not in models.VERDICT_STATUSES:
         raise IngestError(f"invalid status: {status}")
+    _reject_local_paths({"verdict.reason": reason})
     moment = now or now_z()
     with FileLock(str(case / _LOCK_RELATIVE)):
         derived = _replay_or_fail(case)

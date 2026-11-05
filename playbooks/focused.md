@@ -34,9 +34,10 @@
    ```bash
    python -X utf8 scripts/prism.py ingest <case> --result results/R1.json
    ```
-   主 Agent 亲自观察到的证据（侦察、手工复现）不入结果包，直接追加（SHA-256 由脚本计算）：
+   主 Agent 亲自观察到的证据（侦察、手工复现）不入结果包，直接追加（SHA-256 由脚本计算；
+   在某个 Run 租约期内取证就传 `--run`，攻击链阶段归属更准确）：
    ```bash
-   python -X utf8 scripts/prism.py evidence <case> --hypothesis H1 \
+   python -X utf8 scripts/prism.py evidence <case> --hypothesis H1 --run R1 \
      --role observation --effect supports --artifact artifacts/<file> --summary "<短摘要>"
    ```
 8. **Verify**：认领独立 Verifier Run，按 `verify.md` 装配 `verify-pack`，独立复现（不读 Worker 叙事），结果包 `results/R2.json` 后 ingest：
@@ -48,7 +49,7 @@
 9. **裁决**：Verifier 结果驱动，confirmed 必须带 Verifier 溯源（缺了命令会直接拒绝）：
    ```bash
    python -X utf8 scripts/prism.py verdict <case> --id V1 --hypothesis H1 \
-     --status confirmed --evidence E1 E2 E3 --reason "<理由>" --verifier-run R2
+     --status confirmed --evidence E1,E2,E3 --reason "<理由>" --verifier-run R2
    ```
 10. **Report**：先过门禁再输出（FAIL 则按提示补齐，不得绕过）：
     ```bash

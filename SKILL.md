@@ -56,7 +56,7 @@ python -X utf8 scripts/prism.py schema --format json|markdown [--out <path>]
 python -X utf8 scripts/prism.py intent <case> --id I1 --title <...> --objective <...> --target <...> --angle <...>
 python -X utf8 scripts/prism.py hypothesis <case> --id H1 --claim <...> --scope <...> --disprove-if <...>
 python -X utf8 scripts/prism.py evidence <case> --hypothesis H1 --role observation --effect supports --artifact artifacts/x --summary <...> [--run R1] [--actor <...>]
-python -X utf8 scripts/prism.py verdict <case> --hypothesis H1 --status confirmed --evidence E1 E2 E3 --reason <...> --verifier-run R2
+python -X utf8 scripts/prism.py verdict <case> --hypothesis H1 --status confirmed --evidence E1,E2,E3 --reason <...> --verifier-run R2
 python -X utf8 scripts/prism.py pack <case> --hypothesis H1 [--json]
 python -X utf8 scripts/prism.py verify-pack <case> --hypothesis H1 [--json]
 python -X utf8 scripts/prism.py migrate <v1_case> --out <v2_case>

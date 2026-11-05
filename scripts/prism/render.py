@@ -292,15 +292,32 @@ def _collect(derived: state.DerivedState) -> dict:
         record["verifier_run"] = str(verdict.get("verifier_run") or "")
         record["verdict_evidence"] = list(verdict.get("evidence", []))
         hypotheses.append(record)
-    # 证据按账本顺序（追加序 = 推演序），并标注所属 Run 的执行者阶段
+    # 证据按账本顺序（追加序 = 推演序），并标注所属 Run 的执行者阶段。
+    # 阶段归属：显式 --run 优先；未关联时按入账时间落入哪个 Run 租约期推断
+    # （直追加案件的证据大多不带 --run，全归 COMMANDER 会让攻击链失真）；
+    # 无任何 Run 可归属时回落 commander。
     run_actor: dict[str, str] = {}
+    run_windows: list[tuple[str, str]] = []  # (start_at, actor) 按 start 排序
     for run_id, run in derived.runs.items():
-        run_actor[run_id] = str(run.get("actor") or "")
+        actor = str(run.get("actor") or "")
+        run_actor[run_id] = actor
+        start = str(run.get("at") or "")
+        if actor and start:
+            run_windows.append((start, actor))
+    run_windows.sort()
+
+    def _infer_actor(at: str) -> str:
+        actor = ""
+        for start, window_actor in run_windows:
+            if at and at >= start:
+                actor = window_actor
+        return actor
+
     evidence: list[dict] = []
     for ev in derived.evidence_by_id.values():
         item = ev.model_dump()
         run_id = str(item.get("run") or "")
-        actor = run_actor.get(run_id, "")
+        actor = run_actor.get(run_id, "") or _infer_actor(str(item.get("at") or ""))
         item["stage_actor"] = actor or "commander"
         item["stage_key"] = f"{actor or 'commander'}:{run_id or '-'}"
         item["role_zh"] = ROLE_ZH.get(item["role"], item["role"])
@@ -894,8 +911,6 @@ body.anim.loaded .reveal { opacity: 1; transform: none; }
   <div class="toolbar reveal">
     <input id="filter" type="text" placeholder="过滤 Filter：目标 / 状态 / ID 关键词">
     <a class="navbtn" href="attack-graph.html" title="打开攻击图 Attack graph">攻击图 →</a>
-    <a class="navbtn" href="board.md" title="战役黑板 Board">黑板 →</a>
-    <a class="navbtn" href="attack-graph.mmd" title="Mermaid 源 Mermaid source">Mermaid →</a>
     <button class="lang" data-lang-toggle title="切换中英文 Switch language">EN</button>
   </div>
 
@@ -955,9 +970,7 @@ body.anim.loaded .reveal { opacity: 1; transform: none; }
   </section>
 
   <footer class="reveal">
-    战役黑板 Board：<a href="board.md">board.md</a> ·
     攻击图 Attack graph：<a href="attack-graph.html">attack-graph.html</a> ·
-    <a href="attack-graph.mmd">attack-graph.mmd</a> ·
     <span data-zh="账本审计权威：../ledger.jsonl（只读）" data-en="Ledger authority: ../ledger.jsonl (read-only)">账本审计权威：../ledger.jsonl（只读）</span>
   </footer>
 </div>
@@ -1041,9 +1054,12 @@ def render_attack_graph(view: dict, out_html: Path) -> None:
         cdn_resources="in_line",  # 硬要求：静态资源内联，无 CDN（pyvis 拼写）
     )
     node_specs: list[tuple[str, str, str]] = []  # (id, label, type)
+    node_titles: dict[str, str] = {}  # id → 悬停 tooltip（节点标签只留短文本）
 
-    def add_node(node_id: str, label: str, type_: str) -> None:
+    def add_node(node_id: str, label: str, type_: str, title: str | None = None) -> None:
         node_specs.append((node_id, label, type_))
+        if title is not None:
+            node_titles[node_id] = title
 
     asset_ids: dict[str, str] = {}
     fact_node_ids: dict[str, str] = {}  # fact 记录 ID → 图节点 ID
@@ -1060,16 +1076,27 @@ def render_attack_graph(view: dict, out_html: Path) -> None:
             fact["id"], f"服务 service: {fact.get('title', fact['id'])}", "service"
         )
     for hyp in view["hypotheses"]:
-        add_node(
-            hyp["id"],
-            f"{hyp['id']} {hyp.get('claim', '')[:40]}"
-            + (
-                "★发现 finding"
-                if hyp["is_finding"]
-                else f"（{status_label(hyp['status'])}）"
-            ),
-            "finding" if hyp["is_finding"] else "hypothesis",
-        )
+        # 节点只留 ID + 状态短标签：claim 原文进悬停 tooltip，
+        # 防止账本里的长文本（乃至误入账的本机路径）直接印在图上
+        if hyp["is_finding"]:
+            label, type_ = f"{hyp['id']} ★FINDING", "finding"
+        else:
+            label = f"{hyp['id']}（{STATUS_ZH.get(hyp['status'], hyp['status'])}）"
+            type_ = "hypothesis"
+        add_node(hyp["id"], label, type_, title=hyp.get("claim", ""))
+    # 合成目标节点：直追加案件可能没有 asset/service fact，从 hypothesis.scope
+    # 抽取主机名派生攻击面节点——避免"资产网络只剩一个假设孤点"，且节点
+    # 显示的是域名/IP 而非假设原文
+    target_ids: dict[str, str] = {}  # host → node id
+    hyp_target_edges: list[tuple[str, str]] = []
+    for hyp in view["hypotheses"]:
+        for host in _family_hosts(str(hyp.get("scope", ""))):
+            if host in asset_ids:
+                continue
+            if host not in target_ids:
+                target_ids[host] = "T_" + _sanitize_node_id(host)
+                add_node(target_ids[host], f"目标 target: {host}", "asset")
+            hyp_target_edges.append((hyp["id"], target_ids[host]))
     # Intent / Run 属流程机械（面板表格与攻击链分阶段已呈现），不再入攻击面图：
     # 全部节点 = 资产 / 服务 / 假设，边 = 攻击面关系，杜绝"执行 run R1"噪音
 
@@ -1089,11 +1116,12 @@ def render_attack_graph(view: dict, out_html: Path) -> None:
         # 账本内容必须转义；canvas 文本形态下实体按字面显示，同样安全
         safe_label = _esc(label)
         color = _COLOR_BY_TYPE.get(type_, "#cccccc")
+        safe_title = _esc(node_titles.get(node_id, label))
         net.add_node(
             node_id,
             label=safe_label,
             color=color,
-            title=safe_label,
+            title=safe_title,
             size=_NODE_SIZE.get(type_, 15),
             font={"size": _NODE_FONT.get(type_, 12), "color": "#211e19",
                   "face": "Microsoft YaHei UI", "vadjust": 2},
@@ -1122,6 +1150,8 @@ def render_attack_graph(view: dict, out_html: Path) -> None:
                         STATUS_ZH.get(hyp["status"], hyp["status"]),
                     )
                 )
+    for hyp_id, target_node in hyp_target_edges:
+        edges.append((hyp_id, target_node, "针对 targets"))
     # Intent/Run 的流程边（intent→run、fact→intent）随节点一并移出攻击面图
 
     for source, target, label in edges:
@@ -1316,8 +1346,6 @@ body[data-view="net"] > #chain-root { display: none; }
   <span class="badge" id="graph-live"><span class="dot"></span><span id="graph-live-text">离线快照 Offline snapshot</span></span>
   <button class="lang" data-lang-toggle title="切换中英文 Switch language">EN</button>
   <a class="navbtn" href="dashboard.html" data-zh="战役面板 →" data-en="Dashboard →">战役面板 →</a>
-  <a class="navbtn" href="board.md" data-zh="黑板 →" data-en="Board →">黑板 →</a>
-  <a class="navbtn" href="attack-graph.mmd" data-zh="Mermaid →" data-en="Mermaid →">Mermaid →</a>
 </div>
 <div id="chain-root">/*__SAPPER_CHAIN__*/</div>
 <script>

@@ -260,9 +260,11 @@ class TestSourceGuards(unittest.TestCase):
 
     def test_accessibility_and_navigation(self):
         for marker in ("#8a5f00", "44px", ":focus-visible", "var(--accent-soft)",
-                       'href="board.md"', 'href="attack-graph.mmd"',
                        "产物导航 Outputs"):
             self.assertIn(marker, self.render, marker)
+        # T-057：board/mmd 是 Agent 与报告用产物，不再进入人看界面导航
+        for stale in ('href="board.md"', 'href="attack-graph.mmd"'):
+            self.assertNotIn(stale, self.render, stale)
         self.assertNotIn("#a4740f", self.render)
         self.assertNotIn("rgba(194,69,30,.09)", self.render)
         self.assertNotIn("P4 落地", self.render)
